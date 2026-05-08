@@ -2,7 +2,7 @@
 
 [中文文档](README.zh.md)
 
-Python agent SDK for Live Avatar **Platform RTC** mode. Join platform LiveKit rooms as `agent_{sessionId}` to drive real-time digital humans. Bring your own ASR and LLM; TTS is typically provided by the platform (or bring your own for lower latency).
+Python agent SDK for Live Avatar **Platform RTC** mode. Join platform LiveKit rooms as `agent_{sessionId}` to drive live avatar. Bring your own ASR and LLM; TTS is typically provided by the platform (or bring your own for lower latency).
 
 The SDK runs on the developer backend, joining the platform LiveKit room as `agent_{sessionId}`. Audio flows through **RTC Tracks**, control events through the **Data Channel**.
 
