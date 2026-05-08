@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "liveavatar-platform-rtc"
+version = "0.1.0"
+description = "Live Avatar Platform RTC Python SDK — agent SDK for LiveKit-based real-time digital human"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "livekit>=1.0",
+    "httpx>=0.25",
+    "numpy>=1.24",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/liveavatar_rtc"]

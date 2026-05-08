@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\".venv/bin/python -c \\\"\\nimport inspect\\nfrom livekit import rtc\\nsig = inspect.signature(rtc.Room.connect)\\nprint('Room.connect signature:')\\nprint(f'  {sig}')\\nprint()\\n\\n# Check token st...",
+  "error": "Exit code 1\nTraceback (most recent call last):\n  File \"<string>\", line 10, in <module>\n    import jwt\nModuleNotFoundError: No module named 'jwt'\nRoom.connect signature:\n  (self, url: 'str', token: 'str', options: 'RoomOptions' = RoomOptions(auto_subscribe=True, dynacast=False, e2ee=None, encryption=None, rtc_config=None, connect_timeout=None, single_peer_connection=None)) -> 'None'",
+  "timestamp": "2026-05-08T02:53:59.220Z",
+  "retry_count": 1
+}
