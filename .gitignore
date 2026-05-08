@@ -179,3 +179,15 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# macOS
+.DS_Store
+
+# Claude Code local settings
+.claude/
+
+# oh-my-claudecode runtime state
+.omc/
+
+# Accidental nested project copy (tracked by mistake)
+/liveavatar-platform-rtc-python/
