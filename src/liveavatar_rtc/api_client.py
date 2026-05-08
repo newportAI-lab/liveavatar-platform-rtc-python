@@ -37,10 +37,12 @@ class ApiClient:
             h["X-Env-Sandbox"] = "true"
         return h
 
-    async def start_session(self, avatar_id: str, session_id: str | None = None) -> SessionInfo:
+    async def start_session(self, avatar_id: str, session_id: str | None = None, voice_id: str | None = None) -> SessionInfo:
         body: dict[str, str] = {"avatarId": avatar_id}
         if session_id:
             body["sessionId"] = session_id
+        if voice_id:
+            body["voiceId"] = voice_id
 
         resp = await self._client.post(
             f"{self._base_url}/v1/session/start",

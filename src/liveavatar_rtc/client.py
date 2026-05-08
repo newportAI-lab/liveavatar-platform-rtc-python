@@ -54,12 +54,16 @@ class PlatformRTCClient:
 
     # ── Connect ─────────────────────────────────────────────
 
-    async def connect(self) -> Session:
-        """Start a session: call /session/start, join LiveKit room as agent_{sessionId}."""
+    async def connect(self, voice_id: str | None = None) -> Session:
+        """Start a session: call /session/start, join LiveKit room as agent_{sessionId}.
+
+        Args:
+            voice_id: Optional voice ID to override the avatar's default voice.
+        """
         if self._session is not None:
             return self._session
 
-        info = await self._api.start_session(self._avatar_id)
+        info = await self._api.start_session(self._avatar_id, voice_id=voice_id)
         logger.info(
             "Session started: sessionId=%s", info.session_id
         )

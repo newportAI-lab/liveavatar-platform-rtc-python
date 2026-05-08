@@ -77,7 +77,7 @@ class TestConnect:
 
         session = await client.connect()
 
-        mock_api.start_session.assert_called_once_with("avatar-123")
+        mock_api.start_session.assert_called_once_with("avatar-123", voice_id=None)
         mock_lk_cls.assert_called_once_with(
             session_id="sess-abc", sfu_url="wss://sfu.test.com",
             agent_token="agent-tok-123", user_token="user-tok-456",
