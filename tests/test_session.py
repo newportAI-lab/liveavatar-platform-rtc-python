@@ -27,6 +27,8 @@ def mock_lk():
     """Create a mock LiveKitManager."""
     lk = MagicMock()
     type(lk).session_id = PropertyMock(return_value="sess-test-123")
+    type(lk).sfu_url = PropertyMock(return_value="wss://sfu.test.com")
+    type(lk).user_token = PropertyMock(return_value="user-tok-test")
     lk.events = EventDispatcher()
     lk.publish_audio_frame = AsyncMock()
     lk.send_data = AsyncMock()
@@ -43,6 +45,12 @@ def session(mock_lk):
 class TestSessionInit:
     def test_session_id_from_lk_manager(self, session, mock_lk):
         assert session.session_id == "sess-test-123"
+
+    def test_sfu_url_from_lk_manager(self, session, mock_lk):
+        assert session.sfu_url == "wss://sfu.test.com"
+
+    def test_user_token_from_lk_manager(self, session, mock_lk):
+        assert session.user_token == "user-tok-test"
 
 
 class TestSessionEventBridge:

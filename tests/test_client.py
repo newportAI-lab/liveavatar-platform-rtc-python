@@ -12,6 +12,7 @@ def session_info():
     return SessionInfo(
         session_id="sess-abc",
         agent_token="agent-tok-123",
+        user_token="user-tok-456",
         sfu_url="wss://sfu.test.com",
     )
 
@@ -33,6 +34,8 @@ def mock_lk_manager():
         lk.wait_until_ready = AsyncMock()
         lk.disconnect = AsyncMock()
         lk.session_id = "sess-abc"
+        lk.sfu_url = "wss://sfu.test.com"
+        lk.user_token = "user-tok-456"
         mock_cls.return_value = lk
         yield mock_cls, lk
 
@@ -77,7 +80,8 @@ class TestConnect:
         mock_api.start_session.assert_called_once_with("avatar-123")
         mock_lk_cls.assert_called_once_with(
             session_id="sess-abc", sfu_url="wss://sfu.test.com",
-            agent_token="agent-tok-123", sample_rate=16000,
+            agent_token="agent-tok-123", user_token="user-tok-456",
+            sample_rate=16000,
         )
         mock_lk.connect.assert_called_once()
         mock_lk.wait_until_ready.assert_called_once()

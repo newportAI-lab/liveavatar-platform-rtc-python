@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable
 from typing import Any
 
@@ -12,6 +13,8 @@ from .session import Session
 logger = logging.getLogger(__name__)
 
 Callback = Callable[..., Any]
+
+_DEFAULT_BASE_URL = "https://facemarket.ai/vih/dispatcher"
 
 
 class PlatformRTCClient:
@@ -30,10 +33,12 @@ class PlatformRTCClient:
         self,
         api_key: str,
         avatar_id: str,
-        base_url: str = "https://facemarket.ai/vih/dispatcher",
+        base_url: str | None = None,
         sample_rate: int = 16000,
         sandbox: bool = False,
     ) -> None:
+        if base_url is None:
+            base_url = os.environ.get("LIVEAVATAR_BASE_URL", _DEFAULT_BASE_URL)
         self._api = ApiClient(api_key=api_key, base_url=base_url, sandbox=sandbox)
         self._avatar_id = avatar_id
         self._sample_rate = sample_rate
@@ -63,6 +68,7 @@ class PlatformRTCClient:
             session_id=info.session_id,
             sfu_url=info.sfu_url,
             agent_token=info.agent_token,
+            user_token=info.user_token,
             sample_rate=self._sample_rate,
         )
 

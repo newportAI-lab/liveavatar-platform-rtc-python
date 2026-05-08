@@ -25,10 +25,11 @@ from liveavatar_rtc import (
 
 
 class BasicAgent:
-    def __init__(self, api_key: str, avatar_id: str):
+    def __init__(self, api_key: str, avatar_id: str, base_url: str | None = None):
         self.client = PlatformRTCClient(
             api_key=api_key,
             avatar_id=avatar_id,
+            base_url=base_url,
             # sample_rate=16000,  # default
             # sandbox=True,       # uncomment for sandbox
         )
@@ -38,6 +39,10 @@ class BasicAgent:
             self._register_handlers(session)
             await session.wait_until_ready()
             print(f"Agent ready, session={session.session_id}")
+            print(f"Frontend handoff: sessionId={session.session_id} userToken={session.user_token} sfuUrl={session.sfu_url}")
+
+            # TODO: pass session.session_id, session.user_token, session.sfu_url
+            # to your frontend so the user can join the same LiveKit room.
 
             # Keep running until disconnected
             disconnect_event = asyncio.Event()
@@ -73,10 +78,11 @@ class BasicAgent:
 if __name__ == "__main__":
     api_key = os.environ.get("LIVEAVATAR_API_KEY", "")
     avatar_id = os.environ.get("LIVEAVATAR_AVATAR_ID", "demo-avatar")
+    base_url = os.environ.get("LIVEAVATAR_BASE_URL")  # None = use default
 
     if not api_key:
         print("Set LIVEAVATAR_API_KEY environment variable")
         exit(1)
 
-    agent = BasicAgent(api_key=api_key, avatar_id=avatar_id)
+    agent = BasicAgent(api_key=api_key, avatar_id=avatar_id, base_url=base_url)
     asyncio.run(agent.run())

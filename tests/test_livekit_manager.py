@@ -97,6 +97,15 @@ class TestBasics:
     def test_identity(self, lk):
         assert _mgr(lk).identity == "agent_test-session"
 
+    def test_session_id_property(self, lk):
+        assert _mgr(lk).session_id == "test-session"
+
+    def test_sfu_url_property(self, lk):
+        assert _mgr(lk).sfu_url == "wss://sfu.test.com"
+
+    def test_user_token_property(self, lk):
+        assert _mgr(lk).user_token == ""
+
     def test_room_property(self, lk):
         assert _mgr(lk).room is _room(lk)
 

@@ -29,6 +29,8 @@ class Session:
     def __init__(self, lk_manager: LiveKitManager) -> None:
         self._lk = lk_manager
         self.session_id = lk_manager.session_id
+        self.sfu_url = lk_manager.sfu_url
+        self.user_token = lk_manager.user_token
         self._events = EventDispatcher()
         self._setup_bridge()
 

@@ -7,6 +7,7 @@ import httpx
 class SessionInfo:
     session_id: str
     agent_token: str
+    user_token: str
     sfu_url: str
 
 
@@ -64,6 +65,7 @@ class ApiClient:
         return SessionInfo(
             session_id=session_id_val,
             agent_token=d.get("agentToken", ""),
+            user_token=d.get("userToken", ""),
             sfu_url=sfu_url_val,
         )
 

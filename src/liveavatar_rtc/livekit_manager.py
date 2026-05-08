@@ -21,11 +21,13 @@ class LiveKitManager:
         session_id: str,
         sfu_url: str,
         agent_token: str,
+        user_token: str = "",
         sample_rate: int = 16000,
     ) -> None:
         self._session_id = session_id
         self._sfu_url = sfu_url
         self._agent_token = agent_token
+        self._user_token = user_token
         self._sample_rate = sample_rate
 
         self._room = rtc.Room()
@@ -46,6 +48,14 @@ class LiveKitManager:
     @property
     def session_id(self) -> str:
         return self._session_id
+
+    @property
+    def sfu_url(self) -> str:
+        return self._sfu_url
+
+    @property
+    def user_token(self) -> str:
+        return self._user_token
 
     @property
     def identity(self) -> str:

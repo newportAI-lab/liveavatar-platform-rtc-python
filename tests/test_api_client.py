@@ -20,10 +20,12 @@ class TestSessionInfo:
         info = SessionInfo(
             session_id="sess-123",
             agent_token="tok-abc",
+            user_token="user-tok-xyz",
             sfu_url="wss://sfu.example.com",
         )
         assert info.session_id == "sess-123"
         assert info.agent_token == "tok-abc"
+        assert info.user_token == "user-tok-xyz"
         assert info.sfu_url == "wss://sfu.example.com"
 
 
@@ -191,6 +193,7 @@ class TestApiClientStartSession:
 
         assert info.session_id == "sess-min"
         assert info.agent_token == ""
+        assert info.user_token == ""
 
 
 class TestApiClientStopSession:
