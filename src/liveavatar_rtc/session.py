@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -48,21 +49,33 @@ class Session:
     def _setup_bridge(self) -> None:
         lk_events = self._lk.events
 
+        # Use sync callbacks with asyncio.create_task() — LiveKit's EventEmitter
+        # does not support async callbacks registered via .on()
+        loop = asyncio.get_event_loop()
+
         lk_events.add(
             "user_audio_frame",
-            lambda frame: self._events.dispatch(USER_AUDIO_FRAME, frame),
+            lambda frame: asyncio.create_task(
+                self._events.dispatch(USER_AUDIO_FRAME, frame)
+            ),
         )
         lk_events.add(
             "user_audio_track_subscribed",
-            lambda info: self._events.dispatch(USER_AUDIO_TRACK_SUBSCRIBED, info),
+            lambda info: asyncio.create_task(
+                self._events.dispatch(USER_AUDIO_TRACK_SUBSCRIBED, info)
+            ),
         )
         lk_events.add(
             "user_joined",
-            lambda identity: self._events.dispatch(USER_JOINED, identity),
+            lambda identity: asyncio.create_task(
+                self._events.dispatch(USER_JOINED, identity)
+            ),
         )
         lk_events.add(
             "disconnected",
-            lambda reason: self._events.dispatch(DISCONNECTED, reason),
+            lambda reason: asyncio.create_task(
+                self._events.dispatch(DISCONNECTED, reason)
+            ),
         )
 
         # Data Channel events — agent receives these from user/coordinator
@@ -77,8 +90,9 @@ class Session:
             lk_events.add(event, self._make_data_handler(event))
 
     def _make_data_handler(self, event: str):
-        async def handle(data: dict) -> None:
-            await self._events.dispatch(event, data)
+        """Create a sync callback that wraps async dispatch with create_task."""
+        def handle(data: dict) -> None:
+            asyncio.create_task(self._events.dispatch(event, data))
         return handle
 
     # ── TTS Output ──────────────────────────────────────────

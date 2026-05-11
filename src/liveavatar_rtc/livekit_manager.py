@@ -75,7 +75,7 @@ class LiveKitManager:
         await self._room.local_participant.publish_track(self._audio_track)
         logger.info("LiveKit connected, agent audio track published")
 
-    async def wait_until_ready(self, timeout: float = 30.0) -> None:
+    async def wait_until_ready(self, timeout: float = 3000.0) -> None:
         await asyncio.wait_for(self._ready_event.wait(), timeout=timeout)
 
     async def disconnect(self) -> None:
@@ -126,13 +126,15 @@ class LiveKitManager:
     # ── Internal Events ─────────────────────────────────────
 
     def _setup_room_events(self) -> None:
-        self._room.on("connected", self._on_connected)
-        self._room.on("disconnected", self._on_disconnected)
+        # Use sync callbacks with asyncio.create_task() — LiveKit's Room
+        # does not support async callbacks registered via .on()
+        self._room.on("connected", lambda *args: asyncio.create_task(self._on_connected(*args)))
+        self._room.on("disconnected", lambda *args: asyncio.create_task(self._on_disconnected(*args)))
         self._room.on("reconnecting", self._on_reconnecting)
-        self._room.on("track_subscribed", self._on_track_subscribed)
+        self._room.on("track_subscribed", lambda *args: asyncio.create_task(self._on_track_subscribed(*args)))
         self._room.on("track_unsubscribed", self._on_track_unsubscribed)
-        self._room.on("data_received", self._on_data_received)
-        self._room.on("participant_connected", self._on_participant_connected)
+        self._room.on("data_received", lambda *args: asyncio.create_task(self._on_data_received(*args)))
+        self._room.on("participant_connected", lambda *args: asyncio.create_task(self._on_participant_connected(*args)))
 
     async def _on_connected(self) -> None:
         logger.debug("LiveKit room connected")
@@ -140,7 +142,7 @@ class LiveKitManager:
     async def _on_disconnected(self, reason: rtc.DisconnectReason) -> None:
         await self.events.dispatch("disconnected", str(reason))
 
-    async def _on_reconnecting(self) -> None:
+    def _on_reconnecting(self) -> None:
         logger.info("LiveKit reconnecting...")
 
     async def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
@@ -183,7 +185,7 @@ class LiveKitManager:
         task = asyncio.create_task(self._consume_audio_stream(track.sid, stream))
         self._stream_tasks[track.sid] = task
 
-    async def _on_track_unsubscribed(
+    def _on_track_unsubscribed(
         self,
         track: rtc.Track,
         publication: rtc.RemoteTrackPublication,
@@ -220,7 +222,7 @@ class LiveKitManager:
                     data=arr,
                     sample_rate=lk_frame.sample_rate,
                     num_channels=lk_frame.num_channels,
-                    timestamp=lk_frame.timestamp_us,
+                    timestamp=getattr(lk_frame, "timestamp", 0),
                 )
                 await self.events.dispatch("user_audio_frame", audio_frame)
         except asyncio.CancelledError:

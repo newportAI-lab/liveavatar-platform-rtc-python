@@ -12,6 +12,7 @@ Usage:
 """
 
 import asyncio
+import json
 import os
 
 from liveavatar_rtc import (
@@ -20,6 +21,7 @@ from liveavatar_rtc import (
     USER_AUDIO_FRAME,
     INPUT_TEXT,
     SESSION_STATE,
+    SCENE_READY,
     DISCONNECTED,
 )
 
@@ -55,19 +57,22 @@ class BasicAgent:
             await disconnect_event.wait()
 
     def _register_handlers(self, session):
+        @session.on(SCENE_READY)
+        async def on_scene_ready(data: dict):
+            print(f"Scene ready: {data}")
+
         @session.on(USER_AUDIO_FRAME)
         async def on_audio(frame: AudioFrame):
-            # TODO: ASR(frame) → text
-            # TODO: LLM(text) → reply
-            # TODO: TTS(reply) → pcm_bytes
-            # session.publish_audio(AudioFrame.from_pcm(pcm_bytes, 24000))
-            pass
-
+            # Echo back the received audio
+            print(f"Audio received, frame={frame}")
+            session.publish_audio(frame)
         @session.on(INPUT_TEXT)
         async def on_text(data: dict):
+            data_str = json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False)
+            print(data_str)
             text = data.get("text", "")
             # TODO: LLM(text) → reply → TTS → publish_audio
-            pass
+            await session.send_response_chunk('343242', text)
 
         @session.on(SESSION_STATE)
         async def on_state(data: dict):
@@ -76,8 +81,8 @@ class BasicAgent:
 
 
 if __name__ == "__main__":
-    api_key = os.environ.get("LIVEAVATAR_API_KEY", "")
-    avatar_id = os.environ.get("LIVEAVATAR_AVATAR_ID", "demo-avatar")
+    api_key = os.environ.get("LIVEAVATAR_API_KEY", "lk_live_ohaq3--lMzUlITsFL98wtackS_tn6O1nHIyIK0I4k14")
+    avatar_id = os.environ.get("LIVEAVATAR_AVATAR_ID", "2")
     base_url = os.environ.get("LIVEAVATAR_BASE_URL")  # None = use default
 
     if not api_key:

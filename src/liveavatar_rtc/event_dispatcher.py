@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -35,11 +36,15 @@ class EventDispatcher:
     async def dispatch(self, event: str, *args: Any, **kwargs: Any) -> None:
         for handler in list(self._handlers.get(event, [])):
             try:
-                await handler(*args, **kwargs)
+                result = handler(*args, **kwargs)
+                if asyncio.iscoroutine(result):
+                    await result
             except Exception:
                 logger.exception("Handler failed for event '%s'", event)
         for handler in list(self._handlers.get("*", [])):
             try:
-                await handler(event, *args, **kwargs)
+                result = handler(event, *args, **kwargs)
+                if asyncio.iscoroutine(result):
+                    await result
             except Exception:
                 logger.exception("Wildcard handler failed for event '%s'", event)

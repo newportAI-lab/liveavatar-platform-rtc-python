@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 
 import httpx
@@ -17,7 +18,7 @@ class ApiClient:
     def __init__(
         self,
         api_key: str,
-        base_url: str = "https://facemarket.ai/vih/dispatcher",
+        base_url: str = "https://pre.facemarket.ai/vih/dispatcher",
         sandbox: bool = False,
     ) -> None:
         self._api_key = api_key
@@ -52,6 +53,8 @@ class ApiClient:
         resp.raise_for_status()
         data: dict = resp.json()
 
+        data_str = json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False)
+        print(data_str)
         if data.get("code") != 0:
             raise ApiError(data.get("code"), data.get("message", "unknown error"))
 
@@ -63,7 +66,7 @@ class ApiClient:
         sfu_url_val = d.get("sfuUrl") or ""
         if not session_id_val or not sfu_url_val:
             raise ApiError(0, "response missing required fields: sessionId or sfuUrl")
-
+        print(d.get("userToken", ""))
         return SessionInfo(
             session_id=session_id_val,
             agent_token=d.get("agentToken", ""),
