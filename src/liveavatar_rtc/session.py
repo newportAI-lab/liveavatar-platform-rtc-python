@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Callable
 from typing import Any
 
 from .event_dispatcher import Callback, EventDispatcher
 from .livekit_manager import LiveKitManager
+from .text_chunker import TextChunker
 from .types import AudioFrame, AudioTrackInfo, TTSConfig
 
 # Event name constants — matches PROTOCOL.livekit.md
@@ -32,6 +34,7 @@ class Session:
         self.sfu_url = lk_manager.sfu_url
         self.user_token = lk_manager.user_token
         self._events = EventDispatcher()
+        self._chunkers: dict[str, TextChunker] = {}
         self._setup_bridge()
 
     # ── Event Registration ──────────────────────────────────
@@ -104,16 +107,46 @@ class Session:
         return request_id
 
     async def send_response_chunk(self, request_id: str, text: str) -> None:
-        """Send a chunk of platform-TTS text."""
-        await self._lk.send_data("response.chunk", {"requestId": request_id, "text": text})
+        """Send a chunk of platform-TTS text.
+
+        Text is buffered internally via TextChunker so that only complete
+        sentences are forwarded to the platform.  Partial sentences are held
+        until a terminator arrives or ``send_response_done`` is called.
+        """
+        if request_id not in self._chunkers:
+            self._chunkers[request_id] = TextChunker(
+                on_flush=self._make_chunk_flusher(request_id),
+            )
+        self._chunkers[request_id].process(text)
 
     async def send_response_done(self, request_id: str) -> None:
-        """Mark the platform-TTS response as complete."""
+        """Mark the platform-TTS response as complete.
+
+        Flushes any remaining buffered text before sending the done signal.
+        """
+        chunker = self._chunkers.pop(request_id, None)
+        if chunker is not None:
+            chunker.flush_remaining()
+            chunker.close()
+        await asyncio.sleep(0)  # let scheduled chunk flushes run before done
         await self._lk.send_data("response.done", {"requestId": request_id})
 
     async def send_response_cancel(self, request_id: str) -> None:
-        """Cancel an in-progress platform-TTS response."""
+        """Cancel an in-progress platform-TTS response.
+
+        Discards any buffered text and sends the cancel signal.
+        """
+        chunker = self._chunkers.pop(request_id, None)
+        if chunker is not None:
+            chunker.close()
         await self._lk.send_data("response.cancel", {"requestId": request_id})
+
+    def _make_chunk_flusher(self, request_id: str):
+        async def on_flush(sentence: str) -> None:
+            await self._lk.send_data(
+                "response.chunk", {"requestId": request_id, "text": sentence},
+            )
+        return on_flush
 
     # ── Developer TTS Audio Lifecycle (response.audio.*) ────
     # Bracket publish_audio() calls so the coordinator can track audio state.

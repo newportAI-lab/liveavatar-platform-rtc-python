@@ -12,11 +12,13 @@ from .session import (
     USER_JOINED,
     Session,
 )
+from .text_chunker import TextChunker
 from .types import AudioFrame, AudioTrackInfo, TTSConfig
 
 __all__ = [
     "PlatformRTCClient",
     "Session",
+    "TextChunker",
     "AudioFrame",
     "AudioTrackInfo",
     "TTSConfig",
