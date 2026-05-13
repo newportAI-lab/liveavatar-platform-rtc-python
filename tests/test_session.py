@@ -221,63 +221,18 @@ class TestSessionPlatformTTS:
         assert "mood" not in payload
 
     @pytest.mark.asyncio
-    async def test_send_response_chunk_buffered_by_text_chunker(self, session, mock_lk):
-        """send_response_chunk buffers text; only sends complete sentences."""
-        await session.send_response_chunk("req-1", "Based on data,")
-        # No terminator — nothing sent yet
-        mock_lk.send_data.assert_not_called()
-
-        await session.send_response_chunk("req-1", " it is volatile.")
-        # Now the accumulated text has a period — flush should fire
-        await asyncio.sleep(0)
-        calls = [c for c in mock_lk.send_data.call_args_list
-                 if c[0][0] == "response.chunk"]
-        assert len(calls) >= 1
-        assert "volatile." in calls[0][0][1]["text"]
-
-    @pytest.mark.asyncio
-    async def test_send_response_chunk_strips_markdown(self, session, mock_lk):
-        """TextChunker inside send_response_chunk strips markdown."""
-        await session.send_response_chunk(
-            "req-3", "Output: ```python\nprint('hi')\n```\nIt works."
+    async def test_send_response_chunk(self, session, mock_lk):
+        await session.send_response_chunk("req-1", "Hello world")
+        mock_lk.send_data.assert_called_once_with(
+            "response.chunk", {"requestId": "req-1", "text": "Hello world"}
         )
-        await session.send_response_done("req-3")
-        await asyncio.sleep(0)
-
-        calls = mock_lk.send_data.call_args_list
-        chunk_calls = [c for c in calls if c[0][0] == "response.chunk"]
-        for call in chunk_calls:
-            assert "print" not in call[0][1]["text"]
 
     @pytest.mark.asyncio
-    async def test_send_response_done_flushes_remaining(self, session, mock_lk):
-        """send_response_done flushes buffered text before done signal."""
-        await session.send_response_chunk("req-1", "Unfinished text")
-        await session.send_response_done("req-1")
-
-        calls = mock_lk.send_data.call_args_list
-        # response.chunk (buffered flush) comes before response.done
-        assert len(calls) >= 2
-        assert calls[-1][0][0] == "response.done"
-        assert calls[-2][0][0] == "response.chunk"
-
-    @pytest.mark.asyncio
-    async def test_send_response_done_no_chunker(self, session, mock_lk):
-        """send_response_done with no prior chunks still sends done."""
+    async def test_send_response_done(self, session, mock_lk):
         await session.send_response_done("req-1")
         mock_lk.send_data.assert_called_once_with(
             "response.done", {"requestId": "req-1"}
         )
-
-    @pytest.mark.asyncio
-    async def test_send_response_cancel_discards_buffer(self, session, mock_lk):
-        """send_response_cancel discards buffered text."""
-        await session.send_response_chunk("req-1", "Discarded text")
-        await session.send_response_cancel("req-1")
-
-        # Only response.cancel should have been sent, no response.chunk
-        mock_lk.send_data.assert_called_once()
-        assert mock_lk.send_data.call_args[0][0] == "response.cancel"
 
 
 class TestSessionSubtitle:

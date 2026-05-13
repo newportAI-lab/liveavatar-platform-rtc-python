@@ -19,6 +19,23 @@ __all__ = [
     "PlatformRTCClient",
     "Session",
     "TextChunker",
+    DISCONNECTED,
+    ERROR,
+    IDLE_TRIGGER,
+    INPUT_TEXT,
+    SCENE_READY,
+    SESSION_CLOSING,
+    SESSION_STATE,
+    USER_AUDIO_FRAME,
+    USER_AUDIO_TRACK_SUBSCRIBED,
+    USER_JOINED,
+    Session,
+)
+from .types import AudioFrame, AudioTrackInfo, TTSConfig
+
+__all__ = [
+    "PlatformRTCClient",
+    "Session",
     "AudioFrame",
     "AudioTrackInfo",
     "TTSConfig",
