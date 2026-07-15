@@ -96,6 +96,11 @@ Register handlers with `@session.on(event_name)`. Common SDK events are
 `CUSTOM_EVENT`. Unknown data-channel envelopes are delivered as
 `CUSTOM_EVENT` without discarding their metadata.
 
+RTC Agent protocol packets are reliable LiveKit Data Channel messages without a
+required topic. The SDK dispatches by the JSON `event` field and does not filter
+incoming packets by topic. `DataChannelEvent.topic` is retained only for
+diagnostics when a participant supplies one.
+
 Developer ASR/VAD and caption integrations can use:
 
 ```python
