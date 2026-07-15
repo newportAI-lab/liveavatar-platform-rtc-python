@@ -35,7 +35,7 @@ class DataChannelEvent:
 
 @dataclass
 class AudioFrame:
-    """PCM audio frame, resampled by SDK to configured sample_rate (default 16kHz mono int16)."""
+    """A mono PCM16 frame. The SDK does not resample; input and output rates are configured independently."""
 
     data: np.ndarray  # PCM int16 samples, shape (samples,)
     sample_rate: int  # Hz

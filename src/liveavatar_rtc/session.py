@@ -109,6 +109,7 @@ class Session:
         events.add("reconnecting", self._forward("reconnecting"))
         events.add("reconnected", self._forward("reconnected"))
         events.add("data_channel_event", self._on_data_channel_event)
+        events.add("protocol_error", self._forward(ERROR))
         events.add(DISCONNECTED, self._on_disconnected)
 
     def _forward(self, event: str) -> Callback:
@@ -241,6 +242,7 @@ class Session:
         seq: int | None = None,
         timestamp: int | None = None,
     ) -> None:
+        self._ensure_open()
         await self._lk.send_data_event(
             DataChannelEvent(
                 event=event,

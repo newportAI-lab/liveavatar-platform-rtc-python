@@ -540,6 +540,56 @@ class TestDataChannelEvents:
         assert isinstance(errors[0], DataChannelProtocolError)
         assert str(errors[0]).startswith("invalid liveavatar data packet:")
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "message",
+        [
+            {"event": "session.state", "data": {"state": 1}},
+            {"event": "error", "data": {}},
+            {"event": "scene.ready", "data": []},
+            {"event": "scene.ready", "requestId": 1},
+            {"event": "scene.ready", "responseId": False},
+            {"event": "scene.ready", "seq": "1"},
+            {"event": "scene.ready", "timestamp": True},
+        ],
+    )
+    async def test_malformed_known_event_envelopes_emit_protocol_error_without_data_event(
+        self, lk, message
+    ):
+        mgr = _mgr(lk)
+        errors = []
+        received = []
+        mgr.events.add("protocol_error", errors.append)
+        mgr.events.add("data_channel_event", received.append)
+
+        await mgr._on_data_received(
+            MagicMock(topic="liveavatar", participant=None, data=json.dumps(message).encode())
+        )
+
+        assert len(errors) == 1
+        assert isinstance(errors[0], DataChannelProtocolError)
+        assert received == []
+
+    @pytest.mark.asyncio
+    async def test_unknown_event_with_valid_envelope_is_preserved(self, lk):
+        mgr = _mgr(lk)
+        received = []
+        mgr.events.add("data_channel_event", received.append)
+
+        await mgr._on_data_received(
+            MagicMock(
+                topic="liveavatar", participant=None,
+                data=b'{"event":"vendor.action","data":{"value":1},"seq":2}',
+            )
+        )
+
+        assert received == [
+            DataChannelEvent(
+                event="vendor.action", data={"value": 1}, seq=2,
+                participant_identity=None, topic="liveavatar",
+            )
+        ]
+
 
 class TestTrackEvents:
     @pytest.mark.asyncio
@@ -743,6 +793,38 @@ class TestTrackEvents:
 
         stream.aclose.assert_awaited_once_with()
         assert mgr._user_audio_track_sid is None
+
+    @pytest.mark.asyncio
+    async def test_user_departure_without_unsubscribe_closes_selected_audio(self, lk):
+        mgr = _mgr(lk)
+        stream = AsyncMock()
+        consumer = asyncio.create_task(asyncio.Event().wait())
+        mgr._user_audio_stream = stream
+        mgr._user_audio_task = consumer
+        mgr._user_audio_track_sid = "TR_cleanup"
+        mgr._user_audio_participant_identity = "user_alice"
+        unsubscribed = AsyncMock()
+        mgr.events.add("user_audio_track_unsubscribed", unsubscribed)
+
+        await mgr._on_participant_disconnected(MagicMock(identity="user_alice"))
+
+        assert consumer.cancelled()
+        stream.aclose.assert_awaited_once_with()
+        assert mgr._user_audio_track_sid is None
+        unsubscribed.assert_awaited_once_with("TR_cleanup")
+
+    @pytest.mark.asyncio
+    async def test_stale_user_departure_does_not_clear_replacement_audio(self, lk):
+        mgr = _mgr(lk)
+        stream = AsyncMock()
+        mgr._user_audio_stream = stream
+        mgr._user_audio_track_sid = "new"
+        mgr._user_audio_participant_identity = "user_bob"
+
+        await mgr._on_participant_disconnected(MagicMock(identity="user_alice"))
+
+        assert mgr._user_audio_track_sid == "new"
+        stream.aclose.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_track_unsubscribe_event_clears_session_audio_state(self, lk):

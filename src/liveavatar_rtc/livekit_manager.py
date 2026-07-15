@@ -14,6 +14,13 @@ from .types import AudioFrame, AudioTrackInfo, DataChannelEvent
 logger = logging.getLogger(__name__)
 
 DATA_TOPIC = "liveavatar"
+_KNOWN_DATA_EVENTS = {
+    "scene.ready",
+    "session.state",
+    "session.closing",
+    "system.idleTrigger",
+    "error",
+}
 
 
 class LiveKitManager:
@@ -43,6 +50,7 @@ class LiveKitManager:
         self._user_audio_stream: rtc.AudioStream | None = None
         self._user_audio_task: asyncio.Task | None = None
         self._user_audio_track_sid: str | None = None
+        self._user_audio_participant_identity: str | None = None
         self._user_audio_lock = asyncio.Lock()
         self._room_event_tasks: set[asyncio.Task] = set()
         self._closing = False
@@ -266,6 +274,15 @@ class LiveKitManager:
         self, participant: rtc.RemoteParticipant
     ) -> None:
         role = self._participant_role(participant.identity)
+        if role == "user":
+            async with self._user_audio_lock:
+                if participant.identity == self._user_audio_participant_identity:
+                    track_sid = self._user_audio_track_sid
+                    await self._clear_user_audio()
+                    if track_sid is not None:
+                        await self.events.dispatch(
+                            "user_audio_track_unsubscribed", track_sid
+                        )
         if role:
             await self.events.dispatch(f"{role}_left", participant.identity)
 
@@ -319,6 +336,7 @@ class LiveKitManager:
             )
             self._user_audio_stream = stream
             self._user_audio_track_sid = track.sid
+            self._user_audio_participant_identity = participant.identity
             self._audio_streams[track.sid] = stream
 
             info = AudioTrackInfo(
@@ -349,6 +367,7 @@ class LiveKitManager:
         self._user_audio_stream = None
         self._user_audio_task = None
         self._user_audio_track_sid = None
+        self._user_audio_participant_identity = None
 
     async def _on_track_unsubscribed(
         self,
@@ -373,6 +392,7 @@ class LiveKitManager:
                 message.get("event"), str
             ):
                 raise ValueError("event must be a string")
+            self._validate_data_event(message)
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
             error = DataChannelProtocolError(
                 f"invalid liveavatar data packet: {exc}"
@@ -392,6 +412,29 @@ class LiveKitManager:
             topic=packet.topic,
         )
         await self.events.dispatch("data_channel_event", envelope)
+
+    @staticmethod
+    def _validate_data_event(message: dict[str, Any]) -> None:
+        for field in ("requestId", "responseId"):
+            if message.get(field) is not None and not isinstance(message[field], str):
+                raise ValueError(f"{field} must be a string")
+        for field in ("seq", "timestamp"):
+            if message.get(field) is not None and (
+                not isinstance(message[field], int)
+                or isinstance(message[field], bool)
+            ):
+                raise ValueError(f"{field} must be an integer")
+
+        event = message["event"]
+        data = message.get("data", {})
+        if event not in _KNOWN_DATA_EVENTS:
+            return
+        if not isinstance(data, dict):
+            raise ValueError("data must be an object for known events")
+        if event == "session.state" and not isinstance(data.get("state"), str):
+            raise ValueError("session.state data.state must be a string")
+        if event == "error" and not isinstance(data.get("message"), str):
+            raise ValueError("error data.message must be a string")
 
     async def _consume_audio_stream(self, track_sid: str, stream: rtc.AudioStream) -> None:
         try:

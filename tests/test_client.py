@@ -6,6 +6,8 @@ import pytest
 
 from liveavatar_rtc.client import PlatformRTCClient
 from liveavatar_rtc.errors import APIError, RTCConnectionError, SessionStartError
+from liveavatar_rtc.event_dispatcher import EventDispatcher
+from liveavatar_rtc.types import DataChannelEvent
 from liveavatar_rtc.types import FrontendConnection, SessionInfo
 
 
@@ -72,6 +74,29 @@ async def test_connect_returns_after_agent_track_publish(client, api, manager, m
         input_sample_rate=16000,
         output_sample_rate=24000,
     )
+
+
+@pytest.mark.asyncio
+async def test_connect_retains_events_emitted_during_manager_connect(client, manager):
+    manager.events = EventDispatcher()
+
+    async def connect_with_remote_state():
+        await manager.events.dispatch("user_joined", "user_alice")
+        await manager.events.dispatch("user_audio_track_subscribed", MagicMock())
+        await manager.events.dispatch(
+            "data_channel_event", DataChannelEvent(event="scene.ready")
+        )
+
+    manager.connect.side_effect = connect_with_remote_state
+    with patch("liveavatar_rtc.client.LiveKitManager", return_value=manager):
+        session = await client.connect()
+
+    assert session.is_user_joined
+    assert session.is_user_audio_subscribed
+    assert session.is_scene_ready
+    await session.wait_for_user(timeout=0)
+    await session.wait_for_user_audio(timeout=0)
+    await session.wait_for_scene_ready(timeout=0)
 
 
 @pytest.mark.asyncio

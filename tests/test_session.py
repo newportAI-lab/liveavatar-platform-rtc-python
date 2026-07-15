@@ -416,6 +416,29 @@ async def test_send_custom_event_preserves_envelope(session, manager):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sender,args",
+    [
+        ("send_custom_event", ("vendor.action",)),
+        ("send_voice_start", ("req",)),
+        ("send_asr_partial", ("req", "text", 1)),
+        ("send_voice_finish", ("req",)),
+        ("send_asr_final", ("req", "text")),
+        ("send_subtitle", ("req", "resp", "text", 1, 2)),
+    ],
+)
+async def test_send_helpers_reject_closing_session_with_typed_error(
+    session, manager, sender, args
+):
+    session._closing = True
+
+    with pytest.raises(SessionClosedError):
+        await getattr(session, sender)(*args)
+
+    manager.send_data_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_close_is_idempotent(session, manager):
     await session.close()
     await session.close()

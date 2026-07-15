@@ -32,3 +32,10 @@ def test_audio_frame_rejects_non_pcm16():
     bad = AudioFrame(np.array([1], dtype=np.int32), 24000, 1)
     with pytest.raises(AudioFormatError, match="int16"):
         bad.validate_for_output(24000)
+
+
+def test_audio_frame_docstring_describes_format_and_rate_handling():
+    doc = AudioFrame.__doc__ or ""
+    assert "mono PCM" in doc
+    assert "does not resample" in doc
+    assert "independently" in doc

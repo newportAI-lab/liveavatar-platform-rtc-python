@@ -122,6 +122,12 @@ class PlatformRTCClient:
             raise
 
         try:
+            session = Session(manager)
+        except BaseException:
+            await self._cleanup_failed_connect(info.session_id, manager)
+            raise
+
+        try:
             await manager.connect()
         except Exception as exc:
             await self._cleanup_failed_connect(info.session_id, manager)
@@ -133,7 +139,6 @@ class PlatformRTCClient:
             raise
 
         try:
-            session = Session(manager)
             self._session = session
             await self._events.dispatch("connection_established", session)
         except BaseException:
