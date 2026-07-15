@@ -7,7 +7,8 @@ import pytest
 from livekit import rtc
 from livekit.rtc.event_emitter import EventEmitter
 
-from liveavatar_rtc.types import AudioFrame
+from liveavatar_rtc.errors import DataChannelProtocolError
+from liveavatar_rtc.types import AudioFrame, DataChannelEvent
 
 
 # ── Fixture ──────────────────────────────────────────────────
@@ -286,6 +287,31 @@ class TestSendData:
         payload = json.loads(_room(lk).local_participant.publish_data.call_args[0][0])
         assert payload["data"] == {}
 
+    @pytest.mark.asyncio
+    async def test_send_data_event_preserves_non_none_envelope_fields(self, lk):
+        event = DataChannelEvent(
+            event="session.state",
+            data={"state": "IDLE"},
+            request_id="r1",
+            response_id=None,
+            seq=0,
+            timestamp=99,
+            participant_identity="coordinator_test-session",
+            topic="ignored",
+        )
+
+        await _mgr(lk).send_data_event(event)
+
+        call = _room(lk).local_participant.publish_data.call_args
+        assert json.loads(call.args[0]) == {
+            "event": "session.state",
+            "data": {"state": "IDLE"},
+            "requestId": "r1",
+            "seq": 0,
+            "timestamp": 99,
+        }
+        assert call.kwargs == {"reliable": True, "topic": "liveavatar"}
+
 
 class TestRoomEvents:
     @pytest.mark.asyncio
@@ -379,6 +405,61 @@ class TestRoomEvents:
         quality.assert_awaited_once_with(
             "user_alice", rtc.ConnectionQuality.QUALITY_GOOD
         )
+
+
+class TestDataChannelEvents:
+    @pytest.mark.asyncio
+    async def test_data_packet_preserves_complete_envelope(self, lk):
+        received = []
+        _mgr(lk).events.add("data_channel_event", received.append)
+        packet = MagicMock(
+            topic="liveavatar",
+            participant=MagicMock(identity="coordinator_test-session"),
+            data=b'{"event":"session.state","requestId":"r1","responseId":"p1","seq":4,"timestamp":99,"data":{"state":"IDLE"}}',
+        )
+
+        await _mgr(lk)._on_data_received(packet)
+
+        assert received == [
+            DataChannelEvent(
+                event="session.state",
+                data={"state": "IDLE"},
+                request_id="r1",
+                response_id="p1",
+                seq=4,
+                timestamp=99,
+                participant_identity="coordinator_test-session",
+                topic="liveavatar",
+            )
+        ]
+
+    @pytest.mark.asyncio
+    async def test_non_liveavatar_topic_is_ignored(self, lk):
+        handler = AsyncMock()
+        _mgr(lk).events.add("data_channel_event", handler)
+
+        await _mgr(lk)._on_data_received(
+            MagicMock(topic="other", participant=None, data=b"{}")
+        )
+
+        handler.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "data",
+        [b"not-json", b"[]", b'{"event":4}', b"\xff"],
+    )
+    async def test_malformed_liveavatar_packet_dispatches_protocol_error(self, lk, data):
+        errors = []
+        _mgr(lk).events.add("protocol_error", errors.append)
+
+        await _mgr(lk)._on_data_received(
+            MagicMock(topic="liveavatar", participant=None, data=data)
+        )
+
+        assert len(errors) == 1
+        assert isinstance(errors[0], DataChannelProtocolError)
+        assert str(errors[0]).startswith("invalid liveavatar data packet:")
 
 
 class TestTrackEvents:
@@ -594,32 +675,33 @@ class TestDataChannel:
         mgr = _mgr(lk)
         events = []
 
-        @mgr.events.on("test.event")
-        async def handler(data):
-            events.append(data)
+        @mgr.events.on("data_channel_event")
+        async def handler(event):
+            events.append(event)
 
-        packet = MagicMock()
+        packet = MagicMock(topic="liveavatar", participant=None)
         packet.data = json.dumps({"event": "test.event", "data": {"key": "val"}})
         await mgr._on_data_received(packet)
-        assert events == [{"key": "val"}]
+        assert events[0].event == "test.event"
+        assert events[0].data == {"key": "val"}
 
     @pytest.mark.asyncio
     async def test_on_data_received_without_data_field(self, lk):
         mgr = _mgr(lk)
         events = []
 
-        @mgr.events.on("test.event")
-        async def handler(data):
-            events.append(data)
+        @mgr.events.on("data_channel_event")
+        async def handler(event):
+            events.append(event)
 
-        packet = MagicMock()
+        packet = MagicMock(topic="liveavatar", participant=None)
         packet.data = json.dumps({"event": "test.event"})
         await mgr._on_data_received(packet)
-        assert events == [{}]
+        assert events[0].data == {}
 
     @pytest.mark.asyncio
     async def test_on_data_received_invalid_json(self, lk):
-        packet = MagicMock()
+        packet = MagicMock(topic="liveavatar", participant=None)
         packet.data = "not valid json{{{"
         await _mgr(lk)._on_data_received(packet)  # Should not raise
 

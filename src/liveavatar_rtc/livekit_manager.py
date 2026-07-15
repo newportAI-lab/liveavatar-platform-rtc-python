@@ -7,8 +7,9 @@ from typing import Any
 import numpy as np
 from livekit import rtc
 
+from .errors import DataChannelProtocolError
 from .event_dispatcher import EventDispatcher
-from .types import AudioFrame, AudioTrackInfo
+from .types import AudioFrame, AudioTrackInfo, DataChannelEvent
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +148,22 @@ class LiveKitManager:
 
     async def send_data(self, event: str, data: dict | None = None) -> None:
         payload = json.dumps({"event": event, "data": data or {}})
+        await self._room.local_participant.publish_data(
+            payload, reliable=True, topic=DATA_TOPIC
+        )
+
+    async def send_data_event(self, event: DataChannelEvent) -> None:
+        envelope = {
+            "event": event.event,
+            "data": event.data,
+            "requestId": event.request_id,
+            "responseId": event.response_id,
+            "seq": event.seq,
+            "timestamp": event.timestamp,
+        }
+        payload = json.dumps(
+            {key: value for key, value in envelope.items() if value is not None}
+        )
         await self._room.local_participant.publish_data(
             payload, reliable=True, topic=DATA_TOPIC
         )
@@ -317,15 +334,33 @@ class LiveKitManager:
                 await self._clear_user_audio()
 
     async def _on_data_received(self, packet: rtc.DataPacket) -> None:
+        if packet.topic != DATA_TOPIC:
+            return
         try:
-            msg = json.loads(packet.data)
-        except json.JSONDecodeError:
-            logger.debug("Ignoring non-JSON data channel message: %r", packet.data)
+            message = json.loads(packet.data)
+            if not isinstance(message, dict) or not isinstance(
+                message.get("event"), str
+            ):
+                raise ValueError("event must be a string")
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            error = DataChannelProtocolError(
+                f"invalid liveavatar data packet: {exc}"
+            )
+            await self.events.dispatch("protocol_error", error)
             return
 
-        event = msg.get("event", "")
-        data = msg.get("data", {})
-        await self.events.dispatch(event, data)
+        participant = getattr(packet, "participant", None)
+        envelope = DataChannelEvent(
+            event=message["event"],
+            data=message.get("data") or {},
+            request_id=message.get("requestId"),
+            response_id=message.get("responseId"),
+            seq=message.get("seq"),
+            timestamp=message.get("timestamp"),
+            participant_identity=getattr(participant, "identity", None),
+            topic=packet.topic,
+        )
+        await self.events.dispatch("data_channel_event", envelope)
 
     async def _consume_audio_stream(self, track_sid: str, stream: rtc.AudioStream) -> None:
         try:
