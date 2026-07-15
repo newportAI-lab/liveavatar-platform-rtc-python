@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 import numpy as np
 from livekit import rtc
@@ -40,6 +42,8 @@ class LiveKitManager:
         self._user_audio_stream: rtc.AudioStream | None = None
         self._user_audio_task: asyncio.Task | None = None
         self._user_audio_track_sid: str | None = None
+        self._user_audio_lock = asyncio.Lock()
+        self._room_event_tasks: set[asyncio.Task] = set()
         self._ready_event = asyncio.Event()
 
         self.events = EventDispatcher()
@@ -84,6 +88,8 @@ class LiveKitManager:
         await asyncio.wait_for(self._ready_event.wait(), timeout=timeout)
 
     async def disconnect(self) -> None:
+        async with self._user_audio_lock:
+            await self._clear_user_audio()
         tasks = list(self._stream_tasks.values())
         for task in tasks:
             task.cancel()
@@ -96,9 +102,6 @@ class LiveKitManager:
                 logger.debug("Error awaiting cancelled task", exc_info=True)
         self._stream_tasks.clear()
         self._audio_streams.clear()
-        self._user_audio_stream = None
-        self._user_audio_task = None
-        self._user_audio_track_sid = None
         if self._audio_source:
             await self._audio_source.aclose()
         await self._room.disconnect()
@@ -134,18 +137,32 @@ class LiveKitManager:
     # ── Internal Events ─────────────────────────────────────
 
     def _setup_room_events(self) -> None:
-        self._room.on("connected", self._on_connected)
-        self._room.on("disconnected", self._on_disconnected)
-        self._room.on("reconnecting", self._on_reconnecting)
-        self._room.on("reconnected", self._on_reconnected)
-        self._room.on("track_subscribed", self._on_track_subscribed)
-        self._room.on("track_unsubscribed", self._on_track_unsubscribed)
-        self._room.on("data_received", self._on_data_received)
-        self._room.on("participant_connected", self._on_participant_connected)
-        self._room.on("participant_disconnected", self._on_participant_disconnected)
-        self._room.on("track_muted", self._on_track_muted)
-        self._room.on("track_unmuted", self._on_track_unmuted)
-        self._room.on("connection_quality_changed", self._on_connection_quality_changed)
+        handlers = {
+            "connected": self._on_connected,
+            "disconnected": self._on_disconnected,
+            "reconnecting": self._on_reconnecting,
+            "reconnected": self._on_reconnected,
+            "track_subscribed": self._on_track_subscribed,
+            "track_unsubscribed": self._on_track_unsubscribed,
+            "data_received": self._on_data_received,
+            "participant_connected": self._on_participant_connected,
+            "participant_disconnected": self._on_participant_disconnected,
+            "track_muted": self._on_track_muted,
+            "track_unmuted": self._on_track_unmuted,
+            "connection_quality_changed": self._on_connection_quality_changed,
+        }
+        for event, handler in handlers.items():
+            self._room.on(event, self._schedule_room_handler(handler))
+
+    def _schedule_room_handler(
+        self, handler: Callable[..., Awaitable[None]]
+    ) -> Callable[..., None]:
+        def callback(*args: Any) -> None:
+            task = asyncio.create_task(handler(*args))
+            self._room_event_tasks.add(task)
+            task.add_done_callback(self._room_event_tasks.discard)
+
+        return callback
 
     async def _on_connected(self) -> None:
         logger.debug("LiveKit room connected")
@@ -225,36 +242,40 @@ class LiveKitManager:
             track.sid,
         )
 
-        stream = rtc.AudioStream(
-            track,
-            sample_rate=self._input_sample_rate,
-            num_channels=1,
-        )
-        await self._clear_user_audio()
-        self._user_audio_stream = stream
-        self._user_audio_track_sid = track.sid
-        self._audio_streams[track.sid] = stream
+        async with self._user_audio_lock:
+            await self._clear_user_audio()
+            stream = rtc.AudioStream(
+                track,
+                sample_rate=self._input_sample_rate,
+                num_channels=1,
+            )
+            self._user_audio_stream = stream
+            self._user_audio_track_sid = track.sid
+            self._audio_streams[track.sid] = stream
 
-        info = AudioTrackInfo(
-            sample_rate=self._input_sample_rate,
-            num_channels=1,
-            participant_identity=participant.identity,
-            track_sid=track.sid,
-        )
-        await self.events.dispatch("user_audio_track_subscribed", info)
+            info = AudioTrackInfo(
+                sample_rate=self._input_sample_rate,
+                num_channels=1,
+                participant_identity=participant.identity,
+                track_sid=track.sid,
+            )
+            await self.events.dispatch("user_audio_track_subscribed", info)
 
-        task = asyncio.create_task(self._consume_audio_stream(track.sid, stream))
-        self._user_audio_task = task
-        self._stream_tasks[track.sid] = task
+            task = asyncio.create_task(self._consume_audio_stream(track.sid, stream))
+            self._user_audio_task = task
+            self._stream_tasks[track.sid] = task
 
     async def _clear_user_audio(self) -> None:
         task = self._user_audio_task
+        stream = self._user_audio_stream
         if task is not None:
             task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
                 pass
+        if stream is not None:
+            await stream.aclose()
         self._audio_streams.clear()
         self._stream_tasks.clear()
         self._user_audio_stream = None
@@ -267,13 +288,9 @@ class LiveKitManager:
         publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
     ) -> None:
-        if track.sid == self._user_audio_track_sid:
-            await self._clear_user_audio()
-        else:
-            self._audio_streams.pop(track.sid, None)
-            task = self._stream_tasks.pop(track.sid, None)
-            if task:
-                task.cancel()
+        async with self._user_audio_lock:
+            if track.sid == self._user_audio_track_sid:
+                await self._clear_user_audio()
 
     async def _on_data_received(self, packet: rtc.DataPacket) -> None:
         try:
@@ -304,6 +321,6 @@ class LiveKitManager:
                 )
                 await self.events.dispatch("user_audio_frame", audio_frame)
         except asyncio.CancelledError:
-            pass
+            raise
         except Exception:
             logger.exception("Error consuming audio stream %s", track_sid)

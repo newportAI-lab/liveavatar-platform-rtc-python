@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import numpy as np
 import pytest
 from livekit import rtc
+from livekit.rtc.event_emitter import EventEmitter
 
 from liveavatar_rtc.types import AudioFrame
 
@@ -96,6 +97,25 @@ def _af_create(fixture):
 
 
 class TestBasics:
+    @pytest.mark.asyncio
+    async def test_room_events_register_sync_callbacks_that_schedule_handlers(self):
+        room = EventEmitter()
+        with patch("livekit.rtc.Room", return_value=room):
+            from liveavatar_rtc.livekit_manager import LiveKitManager
+
+            with pytest.warns(DeprecationWarning):
+                manager = LiveKitManager("test-session", "wss://sfu", "token")
+
+        handler = AsyncMock()
+        manager.events.add("renderer_joined", handler)
+        room.emit(
+            "participant_connected",
+            MagicMock(identity="renderer_test-session"),
+        )
+        await asyncio.sleep(0)
+
+        handler.assert_awaited_once_with("renderer_test-session")
+
     def test_identity(self, lk):
         assert _mgr(lk).identity == "agent_test-session"
 
@@ -161,6 +181,16 @@ class TestDisconnect:
         assert len(mgr._stream_tasks) == 0
         _src(lk).aclose.assert_called_once()
         _room(lk).disconnect.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_disconnect_closes_user_audio_stream(self, lk):
+        mgr = _mgr(lk)
+        stream = AsyncMock()
+        mgr._user_audio_stream = stream
+
+        await mgr.disconnect()
+
+        stream.aclose.assert_awaited_once_with()
 
     @pytest.mark.asyncio
     async def test_disconnect_without_audio_source(self, lk):
@@ -348,9 +378,11 @@ class TestTrackEvents:
         old_track.sid = "old"
         new_track = MagicMock(spec=["sid"])
         new_track.sid = "new"
-        stream = AsyncMock()
-        stream.__aiter__.side_effect = lambda: iter(())
-        _stream_cls(lk).return_value = stream
+        old_stream = AsyncMock()
+        old_stream.__aiter__.return_value = []
+        new_stream = AsyncMock()
+        new_stream.__aiter__.return_value = []
+        _stream_cls(lk).side_effect = [old_stream, new_stream]
 
         with patch("liveavatar_rtc.livekit_manager.isinstance", return_value=True):
             await mgr._on_track_subscribed(old_track, publication, participant)
@@ -358,7 +390,93 @@ class TestTrackEvents:
             await mgr._on_track_subscribed(new_track, publication, participant)
 
         assert old_task.cancelled()
+        old_stream.aclose.assert_awaited_once_with()
         assert mgr._user_audio_track_sid == "new"
+
+    @pytest.mark.asyncio
+    async def test_replacement_cancels_blocked_consumer_and_closes_stream(self, lk):
+        mgr = _mgr(lk)
+        participant = MagicMock(identity="user_alice")
+        publication = MagicMock(source=rtc.TrackSource.SOURCE_MICROPHONE)
+        old_track = MagicMock(sid="old")
+        new_track = MagicMock(sid="new")
+        started = asyncio.Event()
+
+        class BlockingStream:
+            def __init__(self):
+                self.aclose = AsyncMock()
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                started.set()
+                await asyncio.Event().wait()
+
+        old_stream = BlockingStream()
+        new_stream = AsyncMock()
+        new_stream.__aiter__.return_value = []
+        _stream_cls(lk).side_effect = [old_stream, new_stream]
+
+        with patch("liveavatar_rtc.livekit_manager.isinstance", return_value=True):
+            await mgr._on_track_subscribed(old_track, publication, participant)
+            old_task = mgr._user_audio_task
+            await started.wait()
+            await mgr._on_track_subscribed(new_track, publication, participant)
+
+        assert old_task.cancelled()
+        old_stream.aclose.assert_awaited_once_with()
+        assert mgr._user_audio_track_sid == "new"
+
+    @pytest.mark.asyncio
+    async def test_concurrent_subscriptions_are_serialized(self, lk):
+        mgr = _mgr(lk)
+        participant = MagicMock(identity="user_alice")
+        publication = MagicMock(source=rtc.TrackSource.SOURCE_MICROPHONE)
+        first = MagicMock(sid="first")
+        second = MagicMock(sid="second")
+        streams = [AsyncMock(), AsyncMock()]
+        for stream in streams:
+            stream.__aiter__.return_value = []
+        _stream_cls(lk).side_effect = streams
+        first_dispatch_started = asyncio.Event()
+        release_first = asyncio.Event()
+
+        async def block_first(info):
+            if info.track_sid == "first":
+                first_dispatch_started.set()
+                await release_first.wait()
+
+        mgr.events.add("user_audio_track_subscribed", block_first)
+        with patch("liveavatar_rtc.livekit_manager.isinstance", return_value=True):
+            first_callback = asyncio.create_task(
+                mgr._on_track_subscribed(first, publication, participant)
+            )
+            await first_dispatch_started.wait()
+            second_callback = asyncio.create_task(
+                mgr._on_track_subscribed(second, publication, participant)
+            )
+            await asyncio.sleep(0)
+            assert not second_callback.done()
+            release_first.set()
+            await asyncio.gather(first_callback, second_callback)
+
+        assert mgr._user_audio_track_sid == "second"
+        streams[0].aclose.assert_awaited_once_with()
+
+    @pytest.mark.asyncio
+    async def test_stale_unsubscribe_does_not_clear_replacement(self, lk):
+        mgr = _mgr(lk)
+        current_stream = AsyncMock()
+        mgr._user_audio_stream = current_stream
+        mgr._user_audio_track_sid = "new"
+
+        await mgr._on_track_unsubscribed(
+            MagicMock(sid="old"), MagicMock(), MagicMock()
+        )
+
+        assert mgr._user_audio_track_sid == "new"
+        current_stream.aclose.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_non_microphone_audio_is_skipped(self, lk):
@@ -405,18 +523,16 @@ class TestTrackEvents:
     @pytest.mark.asyncio
     async def test_on_track_unsubscribed_cleans_up(self, lk):
         mgr = _mgr(lk)
-        mock_task = MagicMock(spec=asyncio.Task)
-        mock_task.cancel = MagicMock()
-        mgr._audio_streams["TR_cleanup"] = MagicMock()
-        mgr._stream_tasks["TR_cleanup"] = mock_task
+        stream = AsyncMock()
+        mgr._user_audio_stream = stream
+        mgr._user_audio_track_sid = "TR_cleanup"
 
         track = MagicMock()
         track.sid = "TR_cleanup"
         await mgr._on_track_unsubscribed(track, MagicMock(), MagicMock())
 
-        mock_task.cancel.assert_called_once()
-        assert "TR_cleanup" not in mgr._audio_streams
-        assert "TR_cleanup" not in mgr._stream_tasks
+        stream.aclose.assert_awaited_once_with()
+        assert mgr._user_audio_track_sid is None
 
     @pytest.mark.asyncio
     async def test_on_track_unsubscribed_unknown_track_noop(self, lk):
@@ -522,11 +638,12 @@ class TestConsumeAudio:
         assert frames[0].num_channels == 2
 
     @pytest.mark.asyncio
-    async def test_cancelled_silently(self, lk):
+    async def test_cancellation_is_propagated(self, lk):
         mgr = _mgr(lk)
         stream = AsyncMock()
         stream.__aiter__.side_effect = asyncio.CancelledError()
-        await mgr._consume_audio_stream("TR_test", stream)
+        with pytest.raises(asyncio.CancelledError):
+            await mgr._consume_audio_stream("TR_test", stream)
 
     @pytest.mark.asyncio
     async def test_error_logged(self, lk, caplog):
