@@ -189,5 +189,8 @@ cython_debug/
 # oh-my-claudecode runtime state
 .omc/
 
+# Local isolated development worktrees
+.worktrees/
+
 # Accidental nested project copy (tracked by mistake)
 /liveavatar-platform-rtc-python/
