@@ -288,3 +288,31 @@ async def test_second_cycle_disconnect_cleans_the_new_session():
     second_manager.disconnect.assert_awaited_once()
     second_api.stop_session.assert_awaited_once_with("two")
     second_api.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_consumes_completed_failed_disconnect_cycle():
+    first_api, second_api = cycle_api("one"), cycle_api("two")
+    first_manager, second_manager = cycle_manager("one"), cycle_manager("two")
+    primary = RuntimeError("first close failed")
+    first_manager.disconnect.side_effect = primary
+    with (
+        patch("liveavatar_rtc.client.ApiClient", side_effect=[first_api, second_api]),
+        patch(
+            "liveavatar_rtc.client.LiveKitManager",
+            side_effect=[first_manager, second_manager],
+        ),
+    ):
+        client = PlatformRTCClient("key", "avatar")
+        await client.connect()
+        with pytest.raises(RuntimeError) as raised:
+            await client.disconnect()
+        assert raised.value is primary
+
+        session = await client.connect()
+        assert session.session_id == "two"
+        await client.disconnect()
+
+    second_manager.disconnect.assert_awaited_once()
+    second_api.stop_session.assert_awaited_once_with("two")
+    second_api.aclose.assert_awaited_once()

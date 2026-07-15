@@ -55,10 +55,16 @@ class PlatformRTCClient:
         )
 
     async def _prepare_connect_cycle(self) -> None:
-        if self._session is not None and self._session.is_closed:
-            await self.disconnect()
-        elif self._disconnect_task is not None:
-            await asyncio.shield(self._disconnect_task)
+        try:
+            if self._session is not None and self._session.is_closed:
+                await self.disconnect()
+            elif self._disconnect_task is not None:
+                await asyncio.shield(self._disconnect_task)
+        except Exception:
+            logger.debug(
+                "previous connection cycle cleanup failed before reconnect",
+                exc_info=True,
+            )
 
         if self._api_closed:
             self._api = self._new_api()
