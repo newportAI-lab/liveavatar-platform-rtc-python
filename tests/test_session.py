@@ -1,357 +1,209 @@
 import asyncio
-import uuid
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import numpy as np
 import pytest
 
+from liveavatar_rtc.errors import SessionClosedError, SessionWaitTimeoutError
 from liveavatar_rtc.event_dispatcher import EventDispatcher
-from liveavatar_rtc.session import (
-    DISCONNECTED,
-    ERROR,
-    IDLE_TRIGGER,
-    INPUT_TEXT,
-    SCENE_READY,
-    SESSION_CLOSING,
-    SESSION_STATE,
-    USER_AUDIO_FRAME,
-    USER_AUDIO_TRACK_SUBSCRIBED,
-    USER_JOINED,
-    Session,
-)
-from liveavatar_rtc.types import AudioFrame, AudioTrackInfo, TTSConfig
+from liveavatar_rtc.session import Session
+from liveavatar_rtc.types import AudioFrame, AudioTrackInfo, DataChannelEvent
 
 
 @pytest.fixture
-def mock_lk():
-    """Create a mock LiveKitManager."""
-    lk = MagicMock()
-    type(lk).session_id = PropertyMock(return_value="sess-test-123")
-    type(lk).sfu_url = PropertyMock(return_value="wss://sfu.test.com")
-    type(lk).user_token = PropertyMock(return_value="user-tok-test")
-    lk.events = EventDispatcher()
-    lk.publish_audio_frame = AsyncMock()
-    lk.send_data = AsyncMock()
-    lk.wait_until_ready = AsyncMock()
-    lk.disconnect = AsyncMock()
-    return lk
+def manager():
+    manager = MagicMock()
+    type(manager).session_id = PropertyMock(return_value="sess-test-123")
+    type(manager).sfu_url = PropertyMock(return_value="wss://sfu.test.com")
+    type(manager).user_token = PropertyMock(return_value="user-tok-test")
+    manager.events = EventDispatcher()
+    manager.publish_audio_frame = AsyncMock()
+    manager.send_data_event = AsyncMock()
+    manager.disconnect = AsyncMock()
+    return manager
 
 
 @pytest.fixture
-def session(mock_lk):
-    return Session(mock_lk)
+def session(manager):
+    return Session(manager)
 
 
-class TestSessionInit:
-    def test_session_id_from_lk_manager(self, session, mock_lk):
-        assert session.session_id == "sess-test-123"
+def test_initial_state_and_connection_metadata(session):
+    assert session.session_id == "sess-test-123"
+    assert session.sfu_url == "wss://sfu.test.com"
+    assert session.user_token == "user-tok-test"
+    assert session.is_agent_connected
+    assert not session.is_user_joined
+    assert not session.is_user_audio_subscribed
+    assert not session.is_scene_ready
+    assert not session.is_closing
+    assert not session.is_closed
 
-    def test_sfu_url_from_lk_manager(self, session, mock_lk):
-        assert session.sfu_url == "wss://sfu.test.com"
 
-    def test_user_token_from_lk_manager(self, session, mock_lk):
-        assert session.user_token == "user-tok-test"
+@pytest.mark.asyncio
+async def test_scene_ready_sets_state_and_resolves_waiter(session, manager):
+    received = []
+
+    @session.on("scene.ready")
+    async def record(envelope):
+        received.append(envelope)
+
+    waiter = asyncio.create_task(session.wait_for_scene_ready(timeout=0.1))
+
+    envelope = DataChannelEvent(event="scene.ready", topic="liveavatar")
+    await manager.events.dispatch("data_channel_event", envelope)
+
+    await waiter
+    assert session.is_scene_ready
+    assert received == [envelope]
 
 
-class TestSessionEventBridge:
-    @pytest.mark.asyncio
-    async def test_user_audio_frame_bridged(self, session, mock_lk):
-        received = []
+@pytest.mark.asyncio
+async def test_duplicate_scene_ready_is_idempotent(session, manager):
+    received = []
 
-        @session.on(USER_AUDIO_FRAME)
-        async def handler(frame):
-            received.append(frame)
+    @session.on("scene.ready")
+    async def record(envelope):
+        received.append(envelope)
 
-        frame = AudioFrame(
-            data=np.array([1, 2], dtype=np.int16),
-            sample_rate=16000,
-            num_channels=1,
+    envelope = DataChannelEvent(event="scene.ready", topic="liveavatar")
+
+    await manager.events.dispatch("data_channel_event", envelope)
+    await manager.events.dispatch("data_channel_event", envelope)
+
+    assert received == [envelope]
+
+
+@pytest.mark.asyncio
+async def test_unknown_data_event_is_forwarded_as_custom_event(session, manager):
+    received = []
+
+    @session.on("custom_event")
+    async def record(envelope):
+        received.append(envelope)
+
+    envelope = DataChannelEvent(
+        event="vendor.action", data={"value": 1}, request_id="req-1", seq=2
+    )
+
+    await manager.events.dispatch("data_channel_event", envelope)
+
+    assert received == [envelope]
+
+
+@pytest.mark.asyncio
+async def test_participant_and_track_events_update_state(session, manager):
+    user = asyncio.create_task(session.wait_for_user(timeout=0.1))
+    await manager.events.dispatch("user_joined", "user_alice")
+    await user
+    assert session.is_user_joined
+
+    info = AudioTrackInfo(16000, 1, "user_alice", "TR_1")
+    audio = asyncio.create_task(session.wait_for_user_audio(timeout=0.1))
+    await manager.events.dispatch("user_audio_track_subscribed", info)
+    await audio
+    assert session.is_user_audio_subscribed
+
+    await manager.events.dispatch("user_audio_track_unsubscribed", "TR_1")
+    await manager.events.dispatch("user_left", "user_alice")
+    assert not session.is_user_audio_subscribed
+    assert not session.is_user_joined
+
+
+@pytest.mark.asyncio
+async def test_waiters_return_immediately_for_satisfied_state(session, manager):
+    await manager.events.dispatch("user_joined", "user_alice")
+    await manager.events.dispatch(
+        "user_audio_track_subscribed", AudioTrackInfo(16000, 1, "user_alice", "TR_1")
+    )
+    await manager.events.dispatch(
+        "data_channel_event", DataChannelEvent(event="scene.ready")
+    )
+    await session.wait_for_user(timeout=0)
+    await session.wait_for_user_audio(timeout=0)
+    await session.wait_for_scene_ready(timeout=0)
+
+
+@pytest.mark.asyncio
+async def test_waiter_fails_when_session_closes(session):
+    waiter = asyncio.create_task(session.wait_for_user(timeout=10))
+    await asyncio.sleep(0)
+    await session.close()
+    with pytest.raises(SessionClosedError):
+        await waiter
+
+
+@pytest.mark.asyncio
+async def test_waiter_raises_typed_timeout(session):
+    with pytest.raises(SessionWaitTimeoutError, match="scene_ready"):
+        await session.wait_for_scene_ready(timeout=0.01)
+
+
+@pytest.mark.asyncio
+async def test_disconnected_closes_session_and_resolves_waiters(session, manager):
+    waiter = asyncio.create_task(session.wait_for_user(timeout=10))
+    await asyncio.sleep(0)
+    await manager.events.dispatch("disconnected", "room closed")
+    with pytest.raises(SessionClosedError):
+        await waiter
+    assert session.is_closed
+    assert not session.is_agent_connected
+
+
+@pytest.mark.asyncio
+async def test_publish_audio_delegates(session, manager):
+    frame = AudioFrame(np.array([0], dtype=np.int16), 16000, 1)
+    await session.publish_audio(frame)
+    manager.publish_audio_frame.assert_awaited_once_with(frame)
+
+
+@pytest.mark.asyncio
+async def test_observability_helpers_preserve_correlation_fields(session, manager):
+    await session.send_voice_start("req-1")
+    await session.send_asr_partial("req-1", "hel", 1)
+    await session.send_voice_finish("req-1")
+    await session.send_asr_final("req-1", "hello")
+    await session.send_subtitle("req-1", "resp-1", "caption", 2, 1234)
+
+    assert [call.args[0] for call in manager.send_data_event.await_args_list] == [
+        DataChannelEvent(event="input.voice.start", request_id="req-1"),
+        DataChannelEvent(
+            event="input.asr.partial", data={"text": "hel"}, request_id="req-1", seq=1
+        ),
+        DataChannelEvent(event="input.voice.finish", request_id="req-1"),
+        DataChannelEvent(
+            event="input.asr.final", data={"text": "hello"}, request_id="req-1"
+        ),
+        DataChannelEvent(
+            event="response.chunk",
+            data={"text": "caption"},
+            request_id="req-1",
+            response_id="resp-1",
+            seq=2,
+            timestamp=1234,
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_send_custom_event_preserves_envelope(session, manager):
+    await session.send_custom_event(
+        "vendor.action", {"value": 1}, "req-1", "resp-1", 2, 1234
+    )
+    manager.send_data_event.assert_awaited_once_with(
+        DataChannelEvent(
+            event="vendor.action",
+            data={"value": 1},
+            request_id="req-1",
+            response_id="resp-1",
+            seq=2,
+            timestamp=1234,
         )
-        await mock_lk.events.dispatch("user_audio_frame", frame)
-        assert len(received) == 1
-        assert received[0] is frame
+    )
 
-    @pytest.mark.asyncio
-    async def test_user_audio_track_subscribed_bridged(self, session, mock_lk):
-        received = []
 
-        @session.on(USER_AUDIO_TRACK_SUBSCRIBED)
-        async def handler(info):
-            received.append(info)
-
-        info = AudioTrackInfo(
-            sample_rate=16000,
-            num_channels=1,
-            participant_identity="user_bob",
-            track_sid="TR_xyz",
-        )
-        await mock_lk.events.dispatch("user_audio_track_subscribed", info)
-        assert received == [info]
-
-    @pytest.mark.asyncio
-    async def test_user_joined_bridged(self, session, mock_lk):
-        received = []
-
-        @session.on(USER_JOINED)
-        async def handler(identity):
-            received.append(identity)
-
-        await mock_lk.events.dispatch("user_joined", "user_alice")
-        assert received == ["user_alice"]
-
-    @pytest.mark.asyncio
-    async def test_disconnected_bridged(self, session, mock_lk):
-        received = []
-
-        @session.on(DISCONNECTED)
-        async def handler(reason):
-            received.append(reason)
-
-        await mock_lk.events.dispatch("disconnected", "user_left")
-        assert received == ["user_left"]
-
-    @pytest.mark.asyncio
-    async def test_input_text_bridged(self, session, mock_lk):
-        received = []
-
-        @session.on(INPUT_TEXT)
-        async def handler(data):
-            received.append(data)
-
-        await mock_lk.events.dispatch(INPUT_TEXT, {"text": "hello", "requestId": "r1"})
-        assert received == [{"text": "hello", "requestId": "r1"}]
-
-    @pytest.mark.asyncio
-    async def test_scene_ready_bridged(self, session, mock_lk):
-        received = []
-
-        @session.on(SCENE_READY)
-        async def handler(data):
-            received.append(data)
-
-        await mock_lk.events.dispatch(SCENE_READY, {"status": "ready"})
-        assert received == [{"status": "ready"}]
-
-    @pytest.mark.asyncio
-    async def test_session_state_bridged(self, session, mock_lk):
-        received = []
-
-        @session.on(SESSION_STATE)
-        async def handler(data):
-            received.append(data)
-
-        await mock_lk.events.dispatch(SESSION_STATE, {"state": "SPEAKING"})
-        assert received == [{"state": "SPEAKING"}]
-
-    @pytest.mark.asyncio
-    async def test_session_closing_bridged(self, session, mock_lk):
-        received = []
-
-        @session.on(SESSION_CLOSING)
-        async def handler(data):
-            received.append(data)
-
-        await mock_lk.events.dispatch(SESSION_CLOSING, {"reason": "timeout"})
-        assert received == [{"reason": "timeout"}]
-
-    @pytest.mark.asyncio
-    async def test_idle_trigger_bridged(self, session, mock_lk):
-        received = []
-
-        @session.on(IDLE_TRIGGER)
-        async def handler(data):
-            received.append(data)
-
-        await mock_lk.events.dispatch(IDLE_TRIGGER, {"since_ms": 5000})
-        assert received == [{"since_ms": 5000}]
-
-    @pytest.mark.asyncio
-    async def test_error_bridged(self, session, mock_lk):
-        received = []
-
-        @session.on(ERROR)
-        async def handler(data):
-            received.append(data)
-
-        await mock_lk.events.dispatch(ERROR, {"code": "500", "message": "fail"})
-        assert received == [{"code": "500", "message": "fail"}]
-
-
-class TestSessionPublishAudio:
-    @pytest.mark.asyncio
-    async def test_delegates_to_lk_manager(self, session, mock_lk):
-        frame = AudioFrame(
-            data=np.array([0], dtype=np.int16), sample_rate=16000, num_channels=1
-        )
-        await session.publish_audio(frame)
-        mock_lk.publish_audio_frame.assert_called_once_with(frame)
-
-
-class TestSessionPlatformTTS:
-    @pytest.mark.asyncio
-    async def test_send_response_start_defaults(self, session, mock_lk):
-        with patch("uuid.uuid4", return_value=uuid.UUID("12345678-1234-5678-1234-567812345678")):
-            request_id = await session.send_response_start()
-
-        assert request_id == "12345678-1234-5678-1234-567812345678"
-        mock_lk.send_data.assert_called_once_with(
-            "response.start", {"requestId": request_id}
-        )
-
-    @pytest.mark.asyncio
-    async def test_send_response_start_with_config(self, session, mock_lk):
-        cfg = TTSConfig(speed=1.5, volume=0.8, mood="cheerful")
-        with patch("uuid.uuid4", return_value=uuid.UUID("87654321-4321-8765-4321-876543218765")):
-            request_id = await session.send_response_start(cfg)
-
-        mock_lk.send_data.assert_called_once_with(
-            "response.start",
-            {"requestId": request_id, "speed": 1.5, "volume": 0.8, "mood": "cheerful"},
-        )
-
-    @pytest.mark.asyncio
-    async def test_send_response_start_partial_config(self, session, mock_lk):
-        cfg = TTSConfig(speed=1.2, mood=None)
-        with patch("uuid.uuid4", return_value=uuid.UUID("00000000-0000-0000-0000-000000000001")):
-            await session.send_response_start(cfg)
-
-        payload = mock_lk.send_data.call_args[0][1]
-        assert "speed" in payload
-        assert "volume" not in payload
-        assert "mood" not in payload
-
-    @pytest.mark.asyncio
-    async def test_send_response_chunk(self, session, mock_lk):
-        await session.send_response_chunk("req-1", "Hello world")
-        mock_lk.send_data.assert_called_once_with(
-            "response.chunk", {"requestId": "req-1", "text": "Hello world"}
-        )
-
-    @pytest.mark.asyncio
-    async def test_send_response_done(self, session, mock_lk):
-        await session.send_response_done("req-1")
-        mock_lk.send_data.assert_called_once_with(
-            "response.done", {"requestId": "req-1"}
-        )
-
-
-class TestSessionSubtitle:
-    @pytest.mark.asyncio
-    async def test_send_subtitle(self, session, mock_lk):
-        await session.send_subtitle("req-1", "Subtitle text")
-        mock_lk.send_data.assert_called_once_with(
-            "response.chunk", {"requestId": "req-1", "text": "Subtitle text"}
-        )
-
-
-class TestSessionControl:
-    @pytest.mark.asyncio
-    async def test_interrupt(self, session, mock_lk):
-        await session.interrupt()
-        mock_lk.send_data.assert_called_once_with("control.interrupt")
-
-    @pytest.mark.asyncio
-    async def test_send_prompt(self, session, mock_lk):
-        await session.send_prompt("Hello, how are you?")
-        mock_lk.send_data.assert_called_once_with(
-            "system.prompt", {"text": "Hello, how are you?"}
-        )
-
-
-class TestSessionResponseCancel:
-    @pytest.mark.asyncio
-    async def test_send_response_cancel(self, session, mock_lk):
-        await session.send_response_cancel("req-1")
-        mock_lk.send_data.assert_called_once_with(
-            "response.cancel", {"requestId": "req-1"}
-        )
-
-
-class TestSessionDeveloperTTS:
-    @pytest.mark.asyncio
-    async def test_send_response_audio_start(self, session, mock_lk):
-        with patch("uuid.uuid4", return_value=uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")):
-            request_id = await session.send_response_audio_start()
-
-        assert request_id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-        mock_lk.send_data.assert_called_once_with(
-            "response.audio.start", {"requestId": request_id}
-        )
-
-    @pytest.mark.asyncio
-    async def test_send_response_audio_finish(self, session, mock_lk):
-        await session.send_response_audio_finish("req-1")
-        mock_lk.send_data.assert_called_once_with(
-            "response.audio.finish", {"requestId": "req-1"}
-        )
-
-    @pytest.mark.asyncio
-    async def test_send_response_audio_prompt_start(self, session, mock_lk):
-        with patch("uuid.uuid4", return_value=uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")):
-            request_id = await session.send_response_audio_prompt_start()
-
-        assert request_id == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-        mock_lk.send_data.assert_called_once_with(
-            "response.audio.promptStart", {"requestId": request_id}
-        )
-
-    @pytest.mark.asyncio
-    async def test_send_response_audio_prompt_finish(self, session, mock_lk):
-        await session.send_response_audio_prompt_finish("req-1")
-        mock_lk.send_data.assert_called_once_with(
-            "response.audio.promptFinish", {"requestId": "req-1"}
-        )
-
-
-class TestSessionDeveloperASR:
-    @pytest.mark.asyncio
-    async def test_send_asr_partial(self, session, mock_lk):
-        await session.send_asr_partial("partial text")
-        mock_lk.send_data.assert_called_once_with(
-            "input.asr.partial", {"text": "partial text"}
-        )
-
-    @pytest.mark.asyncio
-    async def test_send_asr_final(self, session, mock_lk):
-        await session.send_asr_final("final text")
-        mock_lk.send_data.assert_called_once_with(
-            "input.asr.final", {"text": "final text"}
-        )
-
-
-class TestSessionDeveloperVAD:
-    @pytest.mark.asyncio
-    async def test_send_voice_start(self, session, mock_lk):
-        await session.send_voice_start()
-        mock_lk.send_data.assert_called_once_with("input.voice.start")
-
-    @pytest.mark.asyncio
-    async def test_send_voice_finish(self, session, mock_lk):
-        await session.send_voice_finish()
-        mock_lk.send_data.assert_called_once_with("input.voice.finish")
-
-
-class TestSessionErrorReporting:
-    @pytest.mark.asyncio
-    async def test_send_error(self, session, mock_lk):
-        await session.send_error("E001", "Something went wrong")
-        mock_lk.send_data.assert_called_once_with(
-            "error", {"code": "E001", "message": "Something went wrong"}
-        )
-
-
-class TestSessionLifecycle:
-    @pytest.mark.asyncio
-    async def test_wait_until_ready(self, session, mock_lk):
-        await session.wait_until_ready(timeout=10.0)
-        mock_lk.wait_until_ready.assert_called_once_with(10.0)
-
-    @pytest.mark.asyncio
-    async def test_wait_until_ready_default_timeout(self, session, mock_lk):
-        await session.wait_until_ready()
-        mock_lk.wait_until_ready.assert_called_once_with(30.0)
-
-    @pytest.mark.asyncio
-    async def test_close(self, session, mock_lk):
-        await session.close()
-        mock_lk.disconnect.assert_called_once()
+@pytest.mark.asyncio
+async def test_close_is_idempotent(session, manager):
+    await session.close()
+    await session.close()
+    manager.disconnect.assert_awaited_once()

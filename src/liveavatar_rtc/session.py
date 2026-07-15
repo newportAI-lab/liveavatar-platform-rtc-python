@@ -1,30 +1,38 @@
 from __future__ import annotations
 
-import uuid
+import asyncio
 from collections.abc import Callable
-from typing import Any
 
+from .errors import SessionClosedError, SessionWaitTimeoutError
 from .event_dispatcher import Callback, EventDispatcher
 from .livekit_manager import LiveKitManager
-from .types import AudioFrame, AudioTrackInfo, TTSConfig
+from .types import AudioFrame, DataChannelEvent
 
-# Event name constants — matches PROTOCOL.livekit.md
-# Inbound (user/coordinator → agent via Data Channel)
-INPUT_TEXT = "input.text"
 SCENE_READY = "scene.ready"
 SESSION_STATE = "session.state"
 SESSION_CLOSING = "session.closing"
 IDLE_TRIGGER = "system.idleTrigger"
 ERROR = "error"
-# SDK-level events (LiveKit tracks)
+CUSTOM_EVENT = "custom_event"
+
 USER_AUDIO_FRAME = "user_audio_frame"
 USER_AUDIO_TRACK_SUBSCRIBED = "user_audio_track_subscribed"
-DISCONNECTED = "disconnected"
+USER_AUDIO_TRACK_UNSUBSCRIBED = "user_audio_track_unsubscribed"
 USER_JOINED = "user_joined"
+USER_LEFT = "user_left"
+DISCONNECTED = "disconnected"
+
+_KNOWN_DATA_EVENTS = {
+    SCENE_READY,
+    SESSION_STATE,
+    SESSION_CLOSING,
+    IDLE_TRIGGER,
+    ERROR,
+}
 
 
 class Session:
-    """Active Platform RTC session — the developer's interface to the digital human."""
+    """An active RTC Agent session."""
 
     def __init__(self, lk_manager: LiveKitManager) -> None:
         self._lk = lk_manager
@@ -32,163 +40,212 @@ class Session:
         self.sfu_url = lk_manager.sfu_url
         self.user_token = lk_manager.user_token
         self._events = EventDispatcher()
+
+        self._agent_connected = True
+        self._user_joined = False
+        self._scene_ready = False
+        self._user_audio_subscribed = False
+        self._closing = False
+        self._closed = False
+
+        self._user_event = asyncio.Event()
+        self._scene_ready_event = asyncio.Event()
+        self._user_audio_event = asyncio.Event()
+        self._closed_event = asyncio.Event()
         self._setup_bridge()
 
-    # ── Event Registration ──────────────────────────────────
+    @property
+    def is_agent_connected(self) -> bool:
+        return self._agent_connected
+
+    @property
+    def is_user_joined(self) -> bool:
+        return self._user_joined
+
+    @property
+    def is_scene_ready(self) -> bool:
+        return self._scene_ready
+
+    @property
+    def is_user_audio_subscribed(self) -> bool:
+        return self._user_audio_subscribed
+
+    @property
+    def is_closing(self) -> bool:
+        return self._closing
+
+    @property
+    def is_closed(self) -> bool:
+        return self._closed
 
     def on(self, event: str) -> Callable[[Callback], Callback]:
-        """Decorator: register a callback for a Live Avatar event.
-
-        Usage:
-            @session.on("input.text")
-            async def handle_text(data: dict): ...
-        """
         return self._events.on(event)
 
     def _setup_bridge(self) -> None:
-        lk_events = self._lk.events
+        events = self._lk.events
+        events.add(USER_JOINED, self._on_user_joined)
+        events.add(USER_LEFT, self._on_user_left)
+        events.add(USER_AUDIO_TRACK_SUBSCRIBED, self._on_user_audio_subscribed)
+        events.add(USER_AUDIO_TRACK_UNSUBSCRIBED, self._on_user_audio_unsubscribed)
+        events.add(USER_AUDIO_FRAME, self._forward(USER_AUDIO_FRAME))
+        events.add("user_audio_track_muted", self._forward("user_audio_track_muted"))
+        events.add("user_audio_track_unmuted", self._forward("user_audio_track_unmuted"))
+        events.add("coordinator_joined", self._forward("coordinator_joined"))
+        events.add("coordinator_left", self._forward("coordinator_left"))
+        events.add("renderer_joined", self._forward("renderer_joined"))
+        events.add("renderer_left", self._forward("renderer_left"))
+        events.add("connection_quality_changed", self._forward("connection_quality_changed"))
+        events.add("reconnecting", self._forward("reconnecting"))
+        events.add("reconnected", self._forward("reconnected"))
+        events.add("data_channel_event", self._on_data_channel_event)
+        events.add(DISCONNECTED, self._on_disconnected)
 
-        lk_events.add(
-            "user_audio_frame",
-            lambda frame: self._events.dispatch(USER_AUDIO_FRAME, frame),
-        )
-        lk_events.add(
-            "user_audio_track_subscribed",
-            lambda info: self._events.dispatch(USER_AUDIO_TRACK_SUBSCRIBED, info),
-        )
-        lk_events.add(
-            "user_joined",
-            lambda identity: self._events.dispatch(USER_JOINED, identity),
-        )
-        lk_events.add(
-            "disconnected",
-            lambda reason: self._events.dispatch(DISCONNECTED, reason),
-        )
+    def _forward(self, event: str) -> Callback:
+        async def forward(*args: object) -> None:
+            await self._events.dispatch(event, *args)
 
-        # Data Channel events — agent receives these from user/coordinator
-        for event in (
-            INPUT_TEXT,
-            SCENE_READY,
-            SESSION_STATE,
-            SESSION_CLOSING,
-            IDLE_TRIGGER,
-            ERROR,
-        ):
-            lk_events.add(event, self._make_data_handler(event))
+        return forward
 
-    def _make_data_handler(self, event: str):
-        async def handle(data: dict) -> None:
-            await self._events.dispatch(event, data)
-        return handle
+    async def _on_user_joined(self, identity: str) -> None:
+        self._user_joined = True
+        self._user_event.set()
+        await self._events.dispatch(USER_JOINED, identity)
 
-    # ── TTS Output ──────────────────────────────────────────
+    async def _on_user_left(self, identity: str) -> None:
+        self._user_joined = False
+        self._user_event.clear()
+        self._user_audio_subscribed = False
+        self._user_audio_event.clear()
+        await self._events.dispatch(USER_LEFT, identity)
+
+    async def _on_user_audio_subscribed(self, info: object) -> None:
+        self._user_audio_subscribed = True
+        self._user_audio_event.set()
+        await self._events.dispatch(USER_AUDIO_TRACK_SUBSCRIBED, info)
+
+    async def _on_user_audio_unsubscribed(self, track_sid: str) -> None:
+        self._user_audio_subscribed = False
+        self._user_audio_event.clear()
+        await self._events.dispatch(USER_AUDIO_TRACK_UNSUBSCRIBED, track_sid)
+
+    async def _on_data_channel_event(self, envelope: DataChannelEvent) -> None:
+        if envelope.event == SCENE_READY:
+            if self._scene_ready:
+                return
+            self._scene_ready = True
+            self._scene_ready_event.set()
+        elif envelope.event == SESSION_CLOSING:
+            self._closing = True
+
+        event = envelope.event if envelope.event in _KNOWN_DATA_EVENTS else CUSTOM_EVENT
+        await self._events.dispatch(event, envelope)
+
+    async def _on_disconnected(self, reason: str) -> None:
+        self._mark_closed()
+        await self._events.dispatch(DISCONNECTED, reason)
+
+    def _mark_closed(self) -> None:
+        self._closing = True
+        self._closed = True
+        self._agent_connected = False
+        self._closed_event.set()
+
+    async def _wait_for(
+        self, event: asyncio.Event, name: str, timeout: float
+    ) -> None:
+        if self._closed:
+            raise SessionClosedError(f"session {self.session_id} is closed")
+        if event.is_set():
+            return
+
+        event_task = asyncio.create_task(event.wait())
+        close_task = asyncio.create_task(self._closed_event.wait())
+        done, pending = await asyncio.wait(
+            {event_task, close_task},
+            timeout=timeout,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        if close_task in done:
+            raise SessionClosedError(
+                f"session {self.session_id} closed while waiting for {name}"
+            )
+        if event_task not in done:
+            raise SessionWaitTimeoutError(f"timed out waiting for {name}")
+
+    async def wait_for_user(self, timeout: float = 30.0) -> None:
+        await self._wait_for(self._user_event, "user", timeout)
+
+    async def wait_for_user_audio(self, timeout: float = 30.0) -> None:
+        await self._wait_for(self._user_audio_event, "user_audio", timeout)
+
+    async def wait_for_scene_ready(self, timeout: float = 30.0) -> None:
+        await self._wait_for(self._scene_ready_event, "scene_ready", timeout)
 
     async def publish_audio(self, frame: AudioFrame) -> None:
-        """Publish an audio frame to the agent Audio Track for developer-provided TTS."""
         await self._lk.publish_audio_frame(frame)
 
-    # ── Platform TTS (response.*) ───────────────────────────
+    async def send_custom_event(
+        self,
+        event: str,
+        data: dict | None = None,
+        request_id: str | None = None,
+        response_id: str | None = None,
+        seq: int | None = None,
+        timestamp: int | None = None,
+    ) -> None:
+        await self._lk.send_data_event(
+            DataChannelEvent(
+                event=event,
+                data=data or {},
+                request_id=request_id,
+                response_id=response_id,
+                seq=seq,
+                timestamp=timestamp,
+            )
+        )
 
-    async def send_response_start(self, config: TTSConfig | None = None) -> str:
-        """Begin a platform-TTS response. Returns a request_id."""
-        request_id = str(uuid.uuid4())
-        payload: dict[str, Any] = {"requestId": request_id}
-        if config:
-            if config.speed is not None:
-                payload["speed"] = config.speed
-            if config.volume is not None:
-                payload["volume"] = config.volume
-            if config.mood is not None:
-                payload["mood"] = config.mood
-        await self._lk.send_data("response.start", payload)
-        return request_id
+    async def send_voice_start(self, request_id: str) -> None:
+        await self.send_custom_event("input.voice.start", request_id=request_id)
 
-    async def send_response_chunk(self, request_id: str, text: str) -> None:
-        """Send a chunk of platform-TTS text."""
-        await self._lk.send_data("response.chunk", {"requestId": request_id, "text": text})
+    async def send_asr_partial(self, request_id: str, text: str, seq: int) -> None:
+        await self.send_custom_event(
+            "input.asr.partial", {"text": text}, request_id=request_id, seq=seq
+        )
 
-    async def send_response_done(self, request_id: str) -> None:
-        """Mark the platform-TTS response as complete."""
-        await self._lk.send_data("response.done", {"requestId": request_id})
+    async def send_voice_finish(self, request_id: str) -> None:
+        await self.send_custom_event("input.voice.finish", request_id=request_id)
 
-    async def send_response_cancel(self, request_id: str) -> None:
-        """Cancel an in-progress platform-TTS response."""
-        await self._lk.send_data("response.cancel", {"requestId": request_id})
+    async def send_asr_final(self, request_id: str, text: str) -> None:
+        await self.send_custom_event(
+            "input.asr.final", {"text": text}, request_id=request_id
+        )
 
-    # ── Developer TTS Audio Lifecycle (response.audio.*) ────
-    # Bracket publish_audio() calls so the coordinator can track audio state.
-    # Use start/finish for normal conversation replies.
-    # Use promptStart/promptFinish for proactive/idle-prompt speech.
-
-    async def send_response_audio_start(self) -> str:
-        """Begin developer TTS audio for a normal conversation reply."""
-        request_id = str(uuid.uuid4())
-        await self._lk.send_data("response.audio.start", {"requestId": request_id})
-        return request_id
-
-    async def send_response_audio_finish(self, request_id: str) -> None:
-        """End developer TTS audio for a normal conversation reply."""
-        await self._lk.send_data("response.audio.finish", {"requestId": request_id})
-
-    async def send_response_audio_prompt_start(self) -> str:
-        """Begin developer TTS audio for a proactive/idle-prompt speech."""
-        request_id = str(uuid.uuid4())
-        await self._lk.send_data("response.audio.promptStart", {"requestId": request_id})
-        return request_id
-
-    async def send_response_audio_prompt_finish(self, request_id: str) -> None:
-        """End developer TTS audio for a proactive/idle-prompt speech."""
-        await self._lk.send_data("response.audio.promptFinish", {"requestId": request_id})
-
-    # ── Subtitle / Caption (response.chunk for frontend) ────
-
-    async def send_subtitle(self, request_id: str, text: str) -> None:
-        """Send subtitle text to the frontend via response.chunk."""
-        await self._lk.send_data("response.chunk", {"requestId": request_id, "text": text})
-
-    # ── Developer ASR (input.asr.*) ─────────────────────────
-
-    async def send_asr_partial(self, text: str) -> None:
-        """Send a partial ASR result to the frontend for live captions."""
-        await self._lk.send_data("input.asr.partial", {"text": text})
-
-    async def send_asr_final(self, text: str) -> None:
-        """Send a final ASR result to the frontend and coordinator."""
-        await self._lk.send_data("input.asr.final", {"text": text})
-
-    # ── Developer VAD (input.voice.*) ───────────────────────
-    # REQUIRED when using developer ASR. The coordinator uses these
-    # boundaries to drive LISTENING ↔ THINKING ↔ SPEAKING transitions.
-
-    async def send_voice_start(self) -> None:
-        """Signal that user voice activity started (VAD start)."""
-        await self._lk.send_data("input.voice.start")
-
-    async def send_voice_finish(self) -> None:
-        """Signal that user voice activity ended (VAD end)."""
-        await self._lk.send_data("input.voice.finish")
-
-    # ── Control ─────────────────────────────────────────────
-
-    async def interrupt(self) -> None:
-        """Interrupt current avatar speech."""
-        await self._lk.send_data("control.interrupt")
-
-    async def send_prompt(self, text: str) -> None:
-        """Trigger proactive avatar speech (idle prompt)."""
-        await self._lk.send_data("system.prompt", {"text": text})
-
-    # ── Error Reporting ─────────────────────────────────────
-
-    async def send_error(self, code: str, message: str) -> None:
-        """Report a developer-side error to the coordinator."""
-        await self._lk.send_data("error", {"code": code, "message": message})
-
-    # ── Lifecycle ───────────────────────────────────────────
-
-    async def wait_until_ready(self, timeout: float = 30.0) -> None:
-        await self._lk.wait_until_ready(timeout)
+    async def send_subtitle(
+        self,
+        request_id: str,
+        response_id: str,
+        text: str,
+        seq: int,
+        timestamp: int,
+    ) -> None:
+        await self.send_custom_event(
+            "response.chunk",
+            {"text": text},
+            request_id=request_id,
+            response_id=response_id,
+            seq=seq,
+            timestamp=timestamp,
+        )
 
     async def close(self) -> None:
-        """Leave LiveKit room and release resources."""
-        await self._lk.disconnect()
+        if self._closed:
+            return
+        self._closing = True
+        try:
+            await self._lk.disconnect()
+        finally:
+            self._mark_closed()
