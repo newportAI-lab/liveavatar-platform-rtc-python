@@ -1,88 +1,76 @@
-"""
-Basic Agent Example — Platform RTC Python SDK
+"""Minimal Platform RTC agent with a developer-owned ASR/LLM/TTS pipeline.
 
-This is a skeleton showing the minimal flow. Replace the TODOs with your actual
-ASR / LLM / TTS implementations.
-
-Prerequisites:
-    export LIVEAVATAR_API_KEY="lf_..."
-
-Usage:
-    python examples/basic_agent.py
+This example has no external AI dependency. ``developer_pipeline`` is a no-op
+placeholder; replace its body with your streaming ASR, LLM, and TTS providers.
 """
 
 import asyncio
 import os
+from collections.abc import AsyncIterator
 
-from liveavatar_rtc import (
-    PlatformRTCClient,
-    AudioFrame,
-    USER_AUDIO_FRAME,
-    INPUT_TEXT,
-    SESSION_STATE,
-    DISCONNECTED,
-)
+from liveavatar_rtc import AudioFrame, DISCONNECTED, PlatformRTCClient
 
 
-class BasicAgent:
-    def __init__(self, api_key: str, avatar_id: str, base_url: str | None = None):
-        self.client = PlatformRTCClient(
-            api_key=api_key,
-            avatar_id=avatar_id,
-            base_url=base_url,
-            # sample_rate=16000,  # default
-            # sandbox=True,       # uncomment for sandbox
+async def developer_pipeline(
+    input_audio: asyncio.Queue[AudioFrame],
+) -> AsyncIterator[AudioFrame]:
+    """Replace with ASR (16 kHz PCM) -> LLM -> TTS (24 kHz PCM)."""
+    while True:
+        await input_audio.get()
+        # A real implementation yields mono PCM16 TTS frames, for example:
+        # yield AudioFrame.from_pcm(tts_pcm, sample_rate=24000)
+        if False:  # Keeps this no-provider example an async generator.
+            yield AudioFrame.from_pcm(b"", sample_rate=24000)
+
+
+async def main() -> None:
+    client = PlatformRTCClient(
+        api_key=os.environ["LIVEAVATAR_API_KEY"],
+        avatar_id=os.environ["LIVEAVATAR_AVATAR_ID"],
+        input_sample_rate=16000,
+        output_sample_rate=24000,
+        base_url=os.environ.get("LIVEAVATAR_BASE_URL"),
+    )
+
+    # Stage 1: connect the backend agent to the Platform RTC room.
+    async with client as session:
+        # Send only this user credential and SFU URL to your frontend. Never
+        # expose the API key or the agent credential.
+        print(f"frontend connection: {session.frontend_connection}")
+        pipeline_input: asyncio.Queue[AudioFrame] = asyncio.Queue()
+        disconnected = asyncio.Event()
+
+        @session.on("user_audio_frame")
+        async def on_user_audio(frame: AudioFrame) -> None:
+            # Input is mono PCM16 resampled to 16 kHz for developer ASR/Omni.
+            await pipeline_input.put(frame)
+
+        @session.on("interrupted")
+        async def on_interrupted(request_id: str | None) -> None:
+            # Also cancel your current LLM/TTS generation for this turn.
+            print(f"interrupted: {request_id}")
+
+        @session.on(DISCONNECTED)
+        async def on_disconnected(reason: str) -> None:
+            print(f"disconnected: {reason}")
+            disconnected.set()
+
+        # Stage 2: wait for the frontend user to join the same room.
+        await session.wait_for_user(timeout=30)
+        # Stage 3: wait until the avatar scene can render streamed audio.
+        await session.wait_for_scene_ready(timeout=30)
+
+        # The SDK validates mono PCM16 and the negotiated output sample rate,
+        # then LiveKit owns real-time buffering and Opus encoding.
+        output_task = asyncio.create_task(
+            session.publish_audio_stream(developer_pipeline(pipeline_input))
         )
-
-    async def run(self):
-        async with self.client as session:
-            self._register_handlers(session)
-            await session.wait_until_ready()
-            print(f"Agent ready, session={session.session_id}")
-            print(f"Frontend handoff: sessionId={session.session_id} userToken={session.user_token} sfuUrl={session.sfu_url}")
-
-            # TODO: pass session.session_id, session.user_token, session.sfu_url
-            # to your frontend so the user can join the same LiveKit room.
-
-            # Keep running until disconnected
-            disconnect_event = asyncio.Event()
-
-            @session.on(DISCONNECTED)
-            async def on_disconnect(reason):
-                print(f"Disconnected: {reason}")
-                disconnect_event.set()
-
-            await disconnect_event.wait()
-
-    def _register_handlers(self, session):
-        @session.on(USER_AUDIO_FRAME)
-        async def on_audio(frame: AudioFrame):
-            # TODO: ASR(frame) → text
-            # TODO: LLM(text) → reply
-            # TODO: TTS(reply) → pcm_bytes
-            # session.publish_audio(AudioFrame.from_pcm(pcm_bytes, 24000))
-            pass
-
-        @session.on(INPUT_TEXT)
-        async def on_text(data: dict):
-            text = data.get("text", "")
-            # TODO: LLM(text) → reply → TTS → publish_audio
-            pass
-
-        @session.on(SESSION_STATE)
-        async def on_state(data: dict):
-            state = data.get("state", "")
-            print(f"State: {state}")
+        try:
+            await disconnected.wait()
+        finally:
+            output_task.cancel()
+            await asyncio.gather(output_task, return_exceptions=True)
 
 
 if __name__ == "__main__":
-    api_key = os.environ.get("LIVEAVATAR_API_KEY", "")
-    avatar_id = os.environ.get("LIVEAVATAR_AVATAR_ID", "demo-avatar")
-    base_url = os.environ.get("LIVEAVATAR_BASE_URL")  # None = use default
-
-    if not api_key:
-        print("Set LIVEAVATAR_API_KEY environment variable")
-        exit(1)
-
-    agent = BasicAgent(api_key=api_key, avatar_id=avatar_id, base_url=base_url)
-    asyncio.run(agent.run())
+    asyncio.run(main())

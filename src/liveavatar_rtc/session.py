@@ -44,10 +44,11 @@ class Session:
         self.session_id = lk_manager.session_id
         self.sfu_url = lk_manager.sfu_url
         self.user_token = lk_manager.user_token
-        self.connection = FrontendConnection(
+        self.frontend_connection = FrontendConnection(
             user_token=lk_manager.user_token,
             sfu_url=lk_manager.sfu_url,
         )
+        self.connection = self.frontend_connection
         self._events = EventDispatcher()
 
         self._agent_connected = True

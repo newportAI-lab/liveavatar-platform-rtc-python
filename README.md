@@ -2,361 +2,115 @@
 
 [中文文档](README.zh.md)
 
-Python agent SDK for Live Avatar **Platform RTC** mode. Join platform LiveKit rooms as `agent_{sessionId}` to drive live avatar. Bring your own ASR and LLM; TTS is typically provided by the platform (or bring your own for lower latency).
+Backend agent SDK for Live Avatar **Platform RTC** mode. Your application owns
+ASR, LLM, and TTS. The SDK connects that pipeline to the platform LiveKit room:
+user audio arrives as PCM frames, and your TTS PCM frames drive avatar speech.
+There is no platform-TTS or text-input compatibility API in this package.
 
-The SDK runs on the developer backend, joining the platform LiveKit room as `agent_{sessionId}`. Audio flows through **RTC Tracks**, control events through the **Data Channel**.
-
-```
-                    Platform LiveKit SFU
-                   ╔═══════════════╗
- user ──Audio──▶   ║               ║──Audio──▶ agent (this SDK)
- user ◀─Video+Audio ║               ║◀─Audio── agent (TTS)
- user ──Data Ch.──▶ ║               ║──Data Ch.──▶ agent
-                   ╚═══════════════╝
-                        │
-                   renderer (platform-managed, subscribes agent Audio Track for lipsync)
-```
-
-## Installation
+## Install
 
 ```bash
 pip install liveavatar-platform-rtc
 ```
 
-Requires Python ≥ 3.10. LiveKit access is provided by the platform.
+Python 3.10 or newer is required.
 
-## Quick Start
-
-```python
-from liveavatar_rtc import PlatformRTCClient, AudioFrame, USER_AUDIO_FRAME
-
-client = PlatformRTCClient(api_key="lf_...", avatar_id="avatar-xxx")
-
-async with client as session:
-    @session.on(USER_AUDIO_FRAME)
-    async def on_audio(frame: AudioFrame):
-        # ASR → LLM → TTS → publish driving audio
-        # await session.publish_audio(tts_output_frame)
-        pass
-```
-
-## Audio Subscription
-
-The agent automatically subscribes to **RemoteAudioTrack** streams from participants whose identity starts with `"user"` (i.e., `user_*`). All other tracks — video, agent audio, non-user participants — are ignored. Subscribed audio is resampled to the configured `sample_rate` (default 16 kHz mono int16) and dispatched as `USER_AUDIO_FRAME` events.
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────┐
-│                  PlatformRTCClient               │
-│  api_key, avatar_id, base_url                    │
-│  connect() → Session                             │
-│  on("connection_established" / "connection_closed") │
-└──────────────────┬──────────────────────────────┘
-                   │
-┌──────────────────▼──────────────────────────────┐
-│                    Session                        │
-│  Event registration on(...)                       │
-│  publish_audio() / send_response_*() / interrupt() │
-└──────┬──────────────────────┬───────────────────┘
-       │                      │
-┌──────▼────────┐   ┌─────────▼──────────────────┐
-│   ApiClient   │   │     LiveKitManager          │
-│               │   │                             │
-│ POST /v1/     │   │  Room join/leave             │
-│  session/start│   │  Audio Track subscribe (user) │
-│  session/stop │   │  Audio Track publish (agent)  │
-└───────────────┘   │  Data Channel send/receive    │
-                    │  EventDispatcher              │
-                    └──────────────────────────────┘
-```
-
-## API Reference
-
-### PlatformRTCClient
-
-```python
-client = PlatformRTCClient(
-    api_key="lf_...",                   # Platform API key
-    avatar_id="avatar-xxx",             # Avatar ID
-    base_url="https://facemarket.ai/vih/dispatcher",  # Optional
-    sample_rate=16000,                   # Audio sample rate, default 16kHz
-    sandbox=False,                       # Sandbox mode
-)
-
-# Context manager (recommended)
-async with client as session:
-    ...
-
-# Or explicit
-session = await client.connect()
-await client.disconnect()
-```
-
-`connect()` flow: `POST /v1/session/start` → obtain token/sfuUrl → connect LiveKit → wait for user to join → return Session.
-
-#### Connection Lifecycle
-
-```python
-@client.on("connection_established")
-async def on_connected(session): ...
-
-@client.on("connection_closed")
-async def on_closed(session_id): ...
-```
-
-### Session — Event Registration
-
-```python
-@session.on(event_name)
-async def handler(data): ...
-```
-
-#### Inbound Events (Data Channel, user/coordinator → agent)
-
-| Constant | Event String | Description |
-|----------|-------------|-------------|
-| `INPUT_TEXT` | `"input.text"` | User text input |
-| `SCENE_READY` | `"scene.ready"` | User scene is ready |
-| `SESSION_STATE` | `"session.state"` | Session state change (IDLE / LISTENING / THINKING / SPEAKING) |
-| `SESSION_CLOSING` | `"session.closing"` | Session is about to close |
-| `IDLE_TRIGGER` | `"system.idleTrigger"` | User inactive for a while — call `send_prompt()` to proactively speak |
-| `ERROR` | `"error"` | Platform/coordinator error |
-
-#### Inbound Events (RTC Track, SDK-level)
-
-| Constant | Event String | Description |
-|----------|-------------|-------------|
-| `USER_AUDIO_FRAME` | `"user_audio_frame"` | User audio PCM frame (resampled to configured sample_rate) |
-| `USER_AUDIO_TRACK_SUBSCRIBED` | `"user_audio_track_subscribed"` | User Audio Track ready |
-| `USER_JOINED` | `"user_joined"` | User joined the room |
-| `DISCONNECTED` | `"disconnected"` | LiveKit connection lost |
-
-### Session — TTS Output
-
-#### Developer-provided TTS (publish Audio Track)
-
-```python
-# Publish PCM frame to agent Audio Track; renderer auto-subscribes for lipsync
-await session.publish_audio(frame: AudioFrame)
-```
-
-#### Platform-provided TTS (Data Channel text stream)
-
-```python
-request_id = await session.send_response_start(config: TTSConfig | None) → str
-await session.send_response_chunk(request_id, text)
-await session.send_response_done(request_id)
-await session.send_response_cancel(request_id)          # Cancel in-progress response
-```
-
-#### Subtitles
-
-```python
-# Send caption text to frontend (uses response.chunk, shown as subtitle)
-await session.send_subtitle(request_id, text)
-```
-
-### Session — Developer TTS Audio Lifecycle
-
-When using developer TTS via `publish_audio()`, bracket the audio stream with lifecycle events so the coordinator can drive its state machine:
-
-```python
-# Normal conversation reply — bracket publish_audio()
-req_id = await session.send_response_audio_start()
-# ... stream TTS PCM via await session.publish_audio() ...
-await session.send_response_audio_finish(req_id)
-
-# Proactive / idle-prompt speech — bracket publish_audio()
-req_id = await session.send_response_audio_prompt_start()
-# ... stream TTS PCM via await session.publish_audio() ...
-await session.send_response_audio_prompt_finish(req_id)
-```
-
-The `promptStart`/`promptFinish` variant tells the coordinator this is an unsolicited prompt (triggered by `system.idleTrigger`), not a user-requested reply.
-
-### Session — Developer ASR
-
-```python
-await session.send_asr_partial(text)   # Interim result → frontend captions
-await session.send_asr_final(text)     # Final result → frontend + coordinator
-```
-
-### Session — Developer VAD (required when using developer ASR)
-
-When you provide your own ASR, you **must** send VAD boundary events so the coordinator can drive its state machine:
-
-```python
-# ── Call these around your ASR pipeline ──
-await session.send_voice_start()       # User started speaking (VAD start)
-# ... ASR processing ...
-await session.send_voice_finish()      # User stopped speaking (VAD end)
-```
-
-Without these events the coordinator cannot transition between LISTENING / THINKING / SPEAKING states correctly.
-
-### Session — Control
-
-```python
-await session.interrupt()                      # Interrupt current speech
-await session.send_prompt("Hey, how are you?") # Trigger proactive speech
-```
-
-### Session — Error Reporting
-
-```python
-await session.send_error("E001", "TTS service unavailable")
-```
-
-### Session — Lifecycle
-
-```python
-await session.wait_until_ready(timeout=30.0)   # Wait for user to join
-await session.close()                            # Leave room, release resources
-```
-
-## Data Types
-
-### AudioFrame
-
-```python
-@dataclass
-class AudioFrame:
-    data: np.ndarray      # PCM int16 samples
-    sample_rate: int      # Hz
-    num_channels: int     # 1 = mono
-    timestamp: int = 0    # LiveKit timestamp (μs)
-
-    # Factory methods
-    AudioFrame.from_pcm(pcm: bytes, sample_rate: int, num_channels: int = 1) → AudioFrame
-    AudioFrame.from_ndarray(data: np.ndarray, sample_rate: int, timestamp: int = 0) → AudioFrame
-
-    # Serialization
-    frame.to_pcm_bytes() → bytes
-```
-
-### AudioTrackInfo
-
-```python
-@dataclass
-class AudioTrackInfo:
-    sample_rate: int
-    num_channels: int
-    participant_identity: str   # e.g. "user_alice"
-    track_sid: str = ""
-```
-
-### TTSConfig
-
-```python
-@dataclass
-class TTSConfig:
-    speed: float | None = None   # e.g. 1.0
-    volume: float | None = None  # e.g. 1.0
-    mood: str | None = None      # e.g. "cheerful"
-```
-
-## Integration Examples
-
-### Voice Conversation (developer ASR + LLM + TTS)
+## Minimal agent
 
 ```python
 import asyncio
-from liveavatar_rtc import (
-    PlatformRTCClient, AudioFrame, TTSConfig,
-    USER_AUDIO_FRAME, INPUT_TEXT, SESSION_STATE,
-    IDLE_TRIGGER, DISCONNECTED, ERROR,
+import os
+from liveavatar_rtc import AudioFrame, PlatformRTCClient
+
+client = PlatformRTCClient(
+    api_key=os.environ["LIVEAVATAR_API_KEY"],
+    avatar_id=os.environ["LIVEAVATAR_AVATAR_ID"],
+    input_sample_rate=16000,
+    output_sample_rate=24000,
 )
 
-async def main():
-    client = PlatformRTCClient(
-        api_key="lf_...",
-        avatar_id="avatar-xxx",
-        sample_rate=16000,
-    )
+async with client as session:
+    print(session.frontend_connection)  # distribute to your frontend
+    pipeline_input: asyncio.Queue[AudioFrame] = asyncio.Queue()
 
-    async with client as session:
+    @session.on("user_audio_frame")
+    async def on_user_audio(frame: AudioFrame) -> None:
+        # Feed your ASR/Omni model, then publish your own TTS frames.
+        await pipeline_input.put(frame)
 
-        @session.on(USER_AUDIO_FRAME)
-        async def on_audio(frame: AudioFrame):
-            # 1. ASR: frame.data (int16 PCM) → text
-            text = await my_asr(frame.data)
-            await session.send_voice_start()
-            await session.send_asr_partial(text)
-            await session.send_asr_final(text)
-            await session.send_voice_finish()
-
-            # 2. LLM → reply
-            reply = await my_llm(text)
-
-            # 3. TTS → PCM → publish, wrapped in audio lifecycle
-            req_id = await session.send_response_audio_start()
-            pcm = await my_tts(reply)
-            await session.publish_audio(AudioFrame.from_pcm(pcm, sample_rate=24000))
-            await session.send_response_audio_finish(req_id)
-
-        @session.on(INPUT_TEXT)
-        async def on_text(data: dict):
-            reply = await my_llm(data.get("text", ""))
-            # Use platform TTS
-            req_id = await session.send_response_start(TTSConfig(speed=1.0))
-            await session.send_response_chunk(req_id, reply)
-            await session.send_response_done(req_id)
-
-        @session.on(IDLE_TRIGGER)
-        async def on_idle(_data):
-            prompt = await my_idle_prompt()
-            await session.send_prompt(prompt)
-
-        @session.on(SESSION_STATE)
-        async def on_state(data: dict):
-            print(f"State: {data.get('state')}")
-
-        @session.on(ERROR)
-        async def on_error(data: dict):
-            print(f"Error: {data}")
-
-        await session.wait_until_ready()
-        print(f"Agent ready, session={session.session_id}")
-
-        disconnect_event = asyncio.Event()
-
-        @session.on(DISCONNECTED)
-        async def wait_disconnect(reason):
-            print(f"Disconnected: {reason}")
-            disconnect_event.set()
-
-        await disconnect_event.wait()
-
-asyncio.run(main())
+    await session.wait_for_user(timeout=30)
+    await session.wait_for_scene_ready(timeout=30)
+    await asyncio.Event().wait()
 ```
 
-### Platform TTS Mode (developer returns text only)
+See [`examples/basic_agent.py`](examples/basic_agent.py) for a syntactically
+runnable, provider-free pipeline skeleton.
+
+## Connection and readiness stages
+
+1. `await client.connect()` (or enter the context manager) starts the platform
+   session and connects the backend agent to LiveKit.
+2. Send `session.frontend_connection` to the frontend. It contains only the
+   user's `user_token` and `sfu_url`; never send the API key or agent token.
+3. `await session.wait_for_user()` waits for that frontend user to join.
+4. `await session.wait_for_scene_ready()` waits for the coordinator's
+   `scene.ready` event. Start avatar output after this stage.
+
+The observable flags are `is_agent_connected`, `is_user_joined`,
+`is_user_audio_subscribed`, `is_scene_ready`, `is_closing`, and `is_closed`.
+Wait methods raise `SessionWaitTimeoutError` on timeout and
+`SessionClosedError` if the session closes first.
+
+## Developer-owned audio pipeline
+
+The SDK emits `user_audio_frame` with mono PCM16 resampled to
+`input_sample_rate` (16 kHz by default), ready for developer-owned ASR or an
+omni model. Your LLM and TTS remain entirely in your backend.
+
+Publish TTS with `await session.publish_audio(frame)` or stream an async
+iterable with `await session.publish_audio_stream(frames)`. Output must be mono
+PCM16 at the negotiated output rate. The recommended and client default rate is
+24 kHz. A session-start response may override `output_sample_rate`; the SDK
+validates against that server-selected rate. LiveKit, not application code,
+owns real-time playout buffering and Opus encoding.
 
 ```python
-async with client as session:
+async def tts_frames():
+    async for pcm in my_streaming_tts():
+        yield AudioFrame.from_pcm(pcm, sample_rate=24000)
 
-    @session.on(USER_AUDIO_FRAME)
-    async def on_audio(frame: AudioFrame):
-        text = await my_asr(frame.data)
-        reply = await my_llm(text)
-
-        # TTS handled by platform; developer returns text only
-        req_id = await session.send_response_start(TTSConfig(speed=1.2, mood="cheerful"))
-        await session.send_response_chunk(req_id, reply)
-        await session.send_response_done(req_id)
-
-    await session.wait_until_ready()
-    await asyncio.Event().wait()  # run forever
+await session.publish_audio_stream(tts_frames())
 ```
 
-## Differences from the WebSocket SDK
+Only one output stream may be active. `await session.interrupt(request_id)`
+cancels it, clears queued playout, sends `control.interrupt`, and emits the
+local `interrupted` hook. Use that hook to cancel your LLM/TTS provider too.
 
-This SDK shares the same event naming convention as [`liveavatar-channel-python`](https://github.com/newportAI-lab/liveavatar-channel-python) (WebSocket protocol). Business logic is largely reusable across modes.
+## Events and protocol hooks
 
-| Aspect | WebSocket SDK | This SDK (Platform RTC) |
-|--------|--------------|------------------------|
-| Transport | WebSocket binary + JSON | LiveKit RTC Track + Data Channel |
-| Audio receive | Binary frame (byte stream) | Audio Track subscription (PCM frames) |
-| Audio send | Binary frame | Audio Track publication |
-| Identity | No room concept | `agent_{sessionId}` |
+Register handlers with `@session.on(event_name)`. Common SDK events are
+`USER_AUDIO_FRAME`, `USER_JOINED`, `USER_LEFT`, `SCENE_READY`,
+`SESSION_STATE`, `SESSION_CLOSING`, `DISCONNECTED`, `ERROR`, and
+`CUSTOM_EVENT`. Unknown data-channel envelopes are delivered as
+`CUSTOM_EVENT` without discarding their metadata.
+
+Developer ASR/VAD and caption integrations can use:
+
+```python
+await session.send_voice_start(request_id)
+await session.send_asr_partial(request_id, text, seq)
+await session.send_voice_finish(request_id)
+await session.send_asr_final(request_id, text)
+await session.send_subtitle(request_id, response_id, text, seq, timestamp)
+await session.send_custom_event("vendor.event", {"value": 1})
+```
+
+Close with `await session.close()` or leave the client context manager. The
+context manager also stops the remote platform session.
+
+## Scope
+
+This package is only for Platform RTC agent backends. It transports PCM audio
+over LiveKit audio tracks and structured control events over the LiveKit data
+channel. Its public surface contains only the v2 Platform RTC agent API, without
+legacy compatibility aliases.

@@ -9,7 +9,29 @@ from .errors import (
     SessionStartError,
     SessionWaitTimeoutError,
 )
-from .types import AudioFrame, DataChannelEvent, FrontendConnection, SessionInfo
+from .client import PlatformRTCClient
+from .session import (
+    CUSTOM_EVENT,
+    DISCONNECTED,
+    ERROR,
+    IDLE_TRIGGER,
+    SCENE_READY,
+    SESSION_CLOSING,
+    SESSION_STATE,
+    USER_AUDIO_FRAME,
+    USER_AUDIO_TRACK_SUBSCRIBED,
+    USER_AUDIO_TRACK_UNSUBSCRIBED,
+    USER_JOINED,
+    USER_LEFT,
+    Session,
+)
+from .types import (
+    AudioFrame,
+    AudioTrackInfo,
+    DataChannelEvent,
+    FrontendConnection,
+    SessionInfo,
+)
 
 __all__ = [
     "RTCSDKError",
@@ -25,4 +47,19 @@ __all__ = [
     "SessionInfo",
     "DataChannelEvent",
     "AudioFrame",
+    "AudioTrackInfo",
+    "PlatformRTCClient",
+    "Session",
+    "SCENE_READY",
+    "SESSION_STATE",
+    "SESSION_CLOSING",
+    "IDLE_TRIGGER",
+    "ERROR",
+    "CUSTOM_EVENT",
+    "USER_AUDIO_FRAME",
+    "USER_AUDIO_TRACK_SUBSCRIBED",
+    "USER_AUDIO_TRACK_UNSUBSCRIBED",
+    "USER_JOINED",
+    "USER_LEFT",
+    "DISCONNECTED",
 ]

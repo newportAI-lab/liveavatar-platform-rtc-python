@@ -13,7 +13,12 @@ from liveavatar_rtc.errors import (
 )
 from liveavatar_rtc.event_dispatcher import EventDispatcher
 from liveavatar_rtc.session import Session
-from liveavatar_rtc.types import AudioFrame, AudioTrackInfo, DataChannelEvent
+from liveavatar_rtc.types import (
+    AudioFrame,
+    AudioTrackInfo,
+    DataChannelEvent,
+    FrontendConnection,
+)
 
 
 @pytest.fixture
@@ -35,10 +40,43 @@ def session(manager):
     return Session(manager)
 
 
+def test_rtc_public_surface_excludes_platform_tts_and_text():
+    import liveavatar_rtc
+
+    expected_exports = {
+        "PlatformRTCClient",
+        "Session",
+        "AudioFrame",
+        "AudioTrackInfo",
+        "FrontendConnection",
+        "DataChannelEvent",
+        "USER_AUDIO_FRAME",
+        "SCENE_READY",
+        "DISCONNECTED",
+    }
+    assert expected_exports.issubset(set(liveavatar_rtc.__all__))
+
+    removed_exports = {"TTSConfig", "INPUT_TEXT"}
+    assert removed_exports.isdisjoint(set(liveavatar_rtc.__all__))
+
+    removed_methods = {
+        "send_response_start",
+        "send_response_chunk",
+        "send_response_done",
+        "send_prompt",
+        "send_response_audio_prompt_start",
+        "send_response_audio_prompt_finish",
+    }
+    assert removed_methods.isdisjoint(set(dir(liveavatar_rtc.Session)))
+
+
 def test_initial_state_and_connection_metadata(session):
     assert session.session_id == "sess-test-123"
     assert session.sfu_url == "wss://sfu.test.com"
     assert session.user_token == "user-tok-test"
+    assert session.frontend_connection == FrontendConnection(
+        user_token="user-tok-test", sfu_url="wss://sfu.test.com"
+    )
     assert session.is_agent_connected
     assert not session.is_user_joined
     assert not session.is_user_audio_subscribed

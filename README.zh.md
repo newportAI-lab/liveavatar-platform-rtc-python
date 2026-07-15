@@ -2,20 +2,10 @@
 
 [English](README.md)
 
-Live Avatar **平台 RTC** 模式的 Python Agent SDK。以 `agent_{sessionId}` 身份加入平台 LiveKit 房间，驱动实时数字人。开发者提供 ASR 和 LLM，TTS 通常由平台提供（也可自带以降低延迟）。
-
-SDK 运行在开发者后端，通过 **RTC Track** 收发音频、**Data Channel** 收发控制事件。
-
-```
-                   平台 LiveKit SFU
-                   ╔═══════════════╗
- user ──Audio──▶   ║               ║──Audio──▶ agent (本 SDK)
- user ◀─Video+Audio ║               ║◀─Audio── agent (TTS)
- user ──Data Ch.──▶ ║               ║──Data Ch.──▶ agent
-                   ╚═══════════════╝
-                        │
-                   renderer (平台管理，订阅 agent Audio Track 驱动口型)
-```
+这是 Live Avatar **Platform RTC** 模式的后端 Agent SDK。ASR、LLM 和 TTS
+全部由开发者应用负责；SDK 将这些管线接入平台 LiveKit 房间：用户音频以 PCM
+帧进入后端，开发者生成的 TTS PCM 音频驱动数字人说话。本包不提供平台 TTS
+或文本输入兼容 API。
 
 ## 安装
 
@@ -23,340 +13,102 @@ SDK 运行在开发者后端，通过 **RTC Track** 收发音频、**Data Channe
 pip install liveavatar-platform-rtc
 ```
 
-依赖：Python ≥ 3.10，LiveKit 访问由平台提供。
+需要 Python 3.10 或更高版本。
 
-## 快速开始
-
-```python
-from liveavatar_rtc import PlatformRTCClient, AudioFrame, USER_AUDIO_FRAME
-
-client = PlatformRTCClient(api_key="lf_...", avatar_id="avatar-xxx")
-
-async with client as session:
-    @session.on(USER_AUDIO_FRAME)
-    async def on_audio(frame: AudioFrame):
-        # ASR → LLM → TTS → 发布音频驱动口型
-        # await session.publish_audio(tts_output_frame)
-        pass
-```
-
-## 音频订阅
-
-Agent 自动订阅身份以 `"user"` 开头的参与者的 **RemoteAudioTrack**（即 `user_*`）。其他所有 Track——视频、agent 音频、非 user 参与者——均被忽略。订阅的音频会重采样到配置的 `sample_rate`（默认 16kHz mono int16），以 `USER_AUDIO_FRAME` 事件分发。
-
-## 架构
-
-```
-┌─────────────────────────────────────────────────┐
-│                  PlatformRTCClient               │
-│  api_key, avatar_id, base_url                    │
-│  connect() → Session                             │
-│  on("connection_established" / "connection_closed") │
-└──────────────────┬──────────────────────────────┘
-                   │
-┌──────────────────▼──────────────────────────────┐
-│                    Session                        │
-│  事件注册 on(...)                                  │
-│  publish_audio() / send_response_*() / interrupt() │
-└──────┬──────────────────────┬───────────────────┘
-       │                      │
-┌──────▼────────┐   ┌─────────▼──────────────────┐
-│   ApiClient   │   │     LiveKitManager          │
-│               │   │                             │
-│ POST /v1/     │   │  Room 加入/离开              │
-│  session/start│   │  Audio Track 订阅 (user)     │
-│  session/stop │   │  Audio Track 发布 (agent)    │
-└───────────────┘   │  Data Channel 收发           │
-                    │  EventDispatcher             │
-                    └─────────────────────────────┘
-```
-
-## API 参考
-
-### PlatformRTCClient
-
-```python
-client = PlatformRTCClient(
-    api_key="lf_...",                   # 平台 API Key
-    avatar_id="avatar-xxx",             # 数字人 ID
-    base_url="https://facemarket.ai/vih/dispatcher",  # 可选
-    sample_rate=16000,                   # 音频采样率，默认 16kHz
-    sandbox=False,                       # 沙箱模式
-)
-
-# Context manager（推荐）
-async with client as session:
-    ...
-
-# 或显式调用
-session = await client.connect()
-await client.disconnect()
-```
-
-`connect()` 内部流程：`POST /v1/session/start` → 获取 token/sfuUrl → 连接 LiveKit → 等待 user 加入 → 返回 Session。
-
-#### 连接生命周期
-
-```python
-@client.on("connection_established")
-async def on_connected(session): ...
-
-@client.on("connection_closed")
-async def on_closed(session_id): ...
-```
-
-### Session — 事件注册
-
-```python
-@session.on(event_name)
-async def handler(data): ...
-```
-
-#### 入站事件（Data Channel，user/coordinator → agent）
-
-| 常量 | 事件名 | 说明 |
-|------|--------|------|
-| `INPUT_TEXT` | `"input.text"` | 用户文本输入 |
-| `SCENE_READY` | `"scene.ready"` | 用户画面就绪 |
-| `SESSION_STATE` | `"session.state"` | 会话状态变更（IDLE / LISTENING / THINKING / SPEAKING） |
-| `SESSION_CLOSING` | `"session.closing"` | 会话即将关闭 |
-| `IDLE_TRIGGER` | `"system.idleTrigger"` | 用户长时间无操作，可调用 `send_prompt()` 主动说话 |
-| `ERROR` | `"error"` | 平台/coordinator 错误 |
-
-#### 入站事件（RTC Track，SDK 级）
-
-| 常量 | 事件名 | 说明 |
-|------|--------|------|
-| `USER_AUDIO_FRAME` | `"user_audio_frame"` | 用户音频 PCM 帧（已重采样到配置的 sample_rate） |
-| `USER_AUDIO_TRACK_SUBSCRIBED` | `"user_audio_track_subscribed"` | 用户 Audio Track 就绪 |
-| `USER_JOINED` | `"user_joined"` | 用户加入房间 |
-| `DISCONNECTED` | `"disconnected"` | LiveKit 连接断开 |
-
-### Session — TTS 输出
-
-#### 开发者提供 TTS（发布 Audio Track）
-
-```python
-# 发布 PCM 音频帧到 agent Audio Track，renderer 自动订阅驱动口型
-await session.publish_audio(frame: AudioFrame)
-```
-
-#### 平台提供 TTS（Data Channel 文本流）
-
-```python
-request_id = await session.send_response_start(config: TTSConfig | None) → str
-await session.send_response_chunk(request_id, text)
-await session.send_response_done(request_id)
-await session.send_response_cancel(request_id)          # 取消进行中的回复
-```
-
-#### 字幕
-
-```python
-# 发送字幕文本到前端（使用 response.chunk，前端展示为字幕）
-await session.send_subtitle(request_id, text)
-```
-
-### Session — 开发者 TTS 音频生命周期
-
-使用开发者 TTS 通过 `publish_audio()` 推送音频时，用生命周期事件包裹音频流，以便 coordinator 驱动状态机：
-
-```python
-# 正常对话回复 — 包裹 publish_audio()
-req_id = await session.send_response_audio_start()
-# ... 流式 TTS PCM 通过 await session.publish_audio() ...
-await session.send_response_audio_finish(req_id)
-
-# 空闲唤起 / 推送提醒 — 包裹 publish_audio()
-req_id = await session.send_response_audio_prompt_start()
-# ... 流式 TTS PCM 通过 await session.publish_audio() ...
-await session.send_response_audio_prompt_finish(req_id)
-```
-
-`promptStart`/`promptFinish` 变体告知 coordinator 这是由 `system.idleTrigger` 触发的主动播报，而非用户请求的回复。
-
-### Session — 开发者 ASR
-
-```python
-await session.send_asr_partial(text)   # 中间结果 → 前端字幕
-await session.send_asr_final(text)     # 最终结果 → 前端 + coordinator
-```
-
-### Session — 开发者 VAD（使用开发者 ASR 时必需）
-
-自行提供 ASR 时**必须**发送 VAD 边界事件，coordinator 依赖它们驱动状态机：
-
-```python
-# ── 在 ASR 管线前后调用 ──
-await session.send_voice_start()       # 用户开始说话（VAD 开始）
-# ... ASR 处理 ...
-await session.send_voice_finish()      # 用户停止说话（VAD 结束）
-```
-
-缺少这些事件，coordinator 无法在 LISTENING / THINKING / SPEAKING 状态间正确切换。
-
-### Session — 控制
-
-```python
-await session.interrupt()                      # 打断当前播报
-await session.send_prompt("你好，最近怎么样？")  # 触发数字人主动说话
-```
-
-### Session — 错误上报
-
-```python
-await session.send_error("E001", "TTS 服务不可用")
-```
-
-### Session — 生命周期
-
-```python
-await session.wait_until_ready(timeout=30.0)   # 等待 user 加入
-await session.close()                            # 退出房间、释放资源
-```
-
-## 数据类型
-
-### AudioFrame
-
-```python
-@dataclass
-class AudioFrame:
-    data: np.ndarray      # PCM int16 samples
-    sample_rate: int      # Hz
-    num_channels: int     # 1 = mono
-    timestamp: int = 0    # LiveKit timestamp (μs)
-
-    # 工厂方法
-    AudioFrame.from_pcm(pcm: bytes, sample_rate: int, num_channels: int = 1) → AudioFrame
-    AudioFrame.from_ndarray(data: np.ndarray, sample_rate: int, timestamp: int = 0) → AudioFrame
-
-    # 序列化
-    frame.to_pcm_bytes() → bytes
-```
-
-### AudioTrackInfo
-
-```python
-@dataclass
-class AudioTrackInfo:
-    sample_rate: int
-    num_channels: int
-    participant_identity: str   # e.g. "user_alice"
-    track_sid: str = ""
-```
-
-### TTSConfig
-
-```python
-@dataclass
-class TTSConfig:
-    speed: float | None = None   # e.g. 1.0
-    volume: float | None = None  # e.g. 1.0
-    mood: str | None = None      # e.g. "cheerful"
-```
-
-## 完整集成示例
-
-### 语音对话（开发者 ASR + LLM + TTS）
+## 最小示例
 
 ```python
 import asyncio
-from liveavatar_rtc import (
-    PlatformRTCClient, AudioFrame, TTSConfig,
-    USER_AUDIO_FRAME, INPUT_TEXT, SESSION_STATE,
-    IDLE_TRIGGER, DISCONNECTED, ERROR,
+import os
+from liveavatar_rtc import AudioFrame, PlatformRTCClient
+
+client = PlatformRTCClient(
+    api_key=os.environ["LIVEAVATAR_API_KEY"],
+    avatar_id=os.environ["LIVEAVATAR_AVATAR_ID"],
+    input_sample_rate=16000,
+    output_sample_rate=24000,
 )
 
-async def main():
-    client = PlatformRTCClient(
-        api_key="lf_...",
-        avatar_id="avatar-xxx",
-        sample_rate=16000,
-    )
+async with client as session:
+    print(session.frontend_connection)  # 分发给前端
+    pipeline_input: asyncio.Queue[AudioFrame] = asyncio.Queue()
 
-    async with client as session:
+    @session.on("user_audio_frame")
+    async def on_user_audio(frame: AudioFrame) -> None:
+        # 输入开发者的 ASR/Omni，再发布开发者自己的 TTS 音频。
+        await pipeline_input.put(frame)
 
-        @session.on(USER_AUDIO_FRAME)
-        async def on_audio(frame: AudioFrame):
-            # 1. ASR：frame.data (int16 PCM) → 文本
-            text = await my_asr(frame.data)
-            await session.send_voice_start()
-            await session.send_asr_partial(text)
-            await session.send_asr_final(text)
-            await session.send_voice_finish()
-
-            # 2. LLM → 回复
-            reply = await my_llm(text)
-
-            # 3. TTS → PCM → 发布，用音频生命周期包裹
-            req_id = await session.send_response_audio_start()
-            pcm = await my_tts(reply)
-            await session.publish_audio(AudioFrame.from_pcm(pcm, sample_rate=24000))
-            await session.send_response_audio_finish(req_id)
-
-        @session.on(INPUT_TEXT)
-        async def on_text(data: dict):
-            reply = await my_llm(data.get("text", ""))
-            # 使用平台 TTS
-            req_id = await session.send_response_start(TTSConfig(speed=1.0))
-            await session.send_response_chunk(req_id, reply)
-            await session.send_response_done(req_id)
-
-        @session.on(IDLE_TRIGGER)
-        async def on_idle(_data):
-            prompt = await my_idle_prompt()
-            await session.send_prompt(prompt)
-
-        @session.on(SESSION_STATE)
-        async def on_state(data: dict):
-            print(f"状态: {data.get('state')}")
-
-        @session.on(ERROR)
-        async def on_error(data: dict):
-            print(f"错误: {data}")
-
-        await session.wait_until_ready()
-        print(f"Agent 就绪，session={session.session_id}")
-
-        disconnect_event = asyncio.Event()
-
-        @session.on(DISCONNECTED)
-        async def wait_disconnect(reason):
-            print(f"断开连接: {reason}")
-            disconnect_event.set()
-
-        await disconnect_event.wait()
-
-asyncio.run(main())
+    await session.wait_for_user(timeout=30)
+    await session.wait_for_scene_ready(timeout=30)
+    await asyncio.Event().wait()
 ```
 
-### 平台 TTS 模式（开发者只需回文本）
+[`examples/basic_agent.py`](examples/basic_agent.py) 提供了语法可运行、无需外部
+AI 服务的管线骨架。
+
+## 连接与就绪阶段
+
+1. `await client.connect()`（或进入异步上下文）创建平台会话，并让后端 Agent
+   连接 LiveKit。
+2. 将 `session.frontend_connection` 发给前端。其中只有用户的 `user_token` 和
+   `sfu_url`；不得发送 API Key 或 Agent Token。
+3. `await session.wait_for_user()` 等待前端用户加入同一房间。
+4. `await session.wait_for_scene_ready()` 等待 coordinator 的 `scene.ready`
+   事件；此后再开始数字人音频输出。
+
+可观察状态包括 `is_agent_connected`、`is_user_joined`、
+`is_user_audio_subscribed`、`is_scene_ready`、`is_closing` 和 `is_closed`。
+等待超时抛出 `SessionWaitTimeoutError`，等待期间关闭则抛出
+`SessionClosedError`。
+
+## 开发者自有音频管线
+
+SDK 通过 `user_audio_frame` 发送单声道 PCM16，并重采样到
+`input_sample_rate`（默认 16 kHz），可直接交给开发者的 ASR 或 Omni 模型。
+LLM 与 TTS 也完全运行在开发者后端。
+
+使用 `await session.publish_audio(frame)` 发布单帧，或使用
+`await session.publish_audio_stream(frames)` 流式发布异步迭代器。输出必须为
+单声道 PCM16，且采样率与协商值一致。推荐值和客户端默认值是 24 kHz；会话
+启动响应可以覆盖 `output_sample_rate`，SDK 会按服务端最终值校验。实时播放
+缓冲和 Opus 编码由 LiveKit 负责，应用无需自行编码 Opus。
 
 ```python
-async with client as session:
+async def tts_frames():
+    async for pcm in my_streaming_tts():
+        yield AudioFrame.from_pcm(pcm, sample_rate=24000)
 
-    @session.on(USER_AUDIO_FRAME)
-    async def on_audio(frame: AudioFrame):
-        text = await my_asr(frame.data)
-        reply = await my_llm(text)
-
-        # TTS 由平台合成，开发者只回文本
-        req_id = await session.send_response_start(TTSConfig(speed=1.2, mood="cheerful"))
-        await session.send_response_chunk(req_id, reply)
-        await session.send_response_done(req_id)
-
-    await session.wait_until_ready()
-    await asyncio.Event().wait()  # 持续运行
+await session.publish_audio_stream(tts_frames())
 ```
 
-## 与 WebSocket SDK 的差异
+同一时间只能有一个输出流。`await session.interrupt(request_id)` 会取消该流、
+清空待播放音频、发送 `control.interrupt`，并触发本地 `interrupted` 钩子。
+应用应在该钩子中同时取消正在生成的 LLM/TTS 请求。
 
-本 SDK 与 [`liveavatar-channel-python`](https://github.com/newportAI-lab/liveavatar-channel-python)（WebSocket 协议）事件命名完全一致，业务代码可复用。
+## 事件与协议钩子
 
-| 维度 | WebSocket SDK | 本 SDK (Platform RTC) |
-|------|-------------|----------------------|
-| 传输层 | WebSocket binary + JSON | LiveKit RTC Track + Data Channel |
-| 音频接收 | Binary Frame（字节流） | Audio Track 订阅（PCM 帧） |
-| 音频发送 | Binary Frame | Audio Track 发布 |
-| Identity | 无房间概念 | `agent_{sessionId}` |
+使用 `@session.on(event_name)` 注册处理器。常用事件包括
+`USER_AUDIO_FRAME`、`USER_JOINED`、`USER_LEFT`、`SCENE_READY`、
+`SESSION_STATE`、`SESSION_CLOSING`、`DISCONNECTED`、`ERROR` 和
+`CUSTOM_EVENT`。未知 Data Channel 事件会作为 `CUSTOM_EVENT` 转发，并保留
+原始元数据。
+
+开发者 ASR/VAD 与字幕管线可调用：
+
+```python
+await session.send_voice_start(request_id)
+await session.send_asr_partial(request_id, text, seq)
+await session.send_voice_finish(request_id)
+await session.send_asr_final(request_id, text)
+await session.send_subtitle(request_id, response_id, text, seq, timestamp)
+await session.send_custom_event("vendor.event", {"value": 1})
+```
+
+使用 `await session.close()` 或退出客户端上下文关闭连接；上下文管理器还会停止
+远端平台会话。
+
+## 适用范围
+
+本包仅面向 Platform RTC 后端 Agent，通过 LiveKit 音频 Track 传输 PCM，
+通过 LiveKit Data Channel 传输结构化控制事件。其公开接口仅包含 v2 Platform
+RTC Agent API，不包含旧版兼容别名。
