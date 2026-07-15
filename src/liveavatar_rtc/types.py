@@ -1,6 +1,36 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
+
+from .errors import AudioFormatError
+
+
+@dataclass(frozen=True)
+class FrontendConnection:
+    user_token: str
+    sfu_url: str
+
+
+@dataclass(frozen=True)
+class SessionInfo:
+    session_id: str
+    agent_token: str
+    user_token: str
+    sfu_url: str
+    output_sample_rate: int | None = None
+
+
+@dataclass(frozen=True)
+class DataChannelEvent:
+    event: str
+    data: dict[str, Any] = field(default_factory=dict)
+    request_id: str | None = None
+    response_id: str | None = None
+    seq: int | None = None
+    timestamp: int | None = None
+    participant_identity: str | None = None
+    topic: str | None = None
 
 
 @dataclass
@@ -36,6 +66,16 @@ class AudioFrame:
     def to_pcm_bytes(self) -> bytes:
         return self.data.tobytes()
 
+    def validate_for_output(self, output_sample_rate: int) -> None:
+        if self.data.dtype != np.int16:
+            raise AudioFormatError("output audio must use int16 PCM samples")
+        if self.num_channels != 1 or self.data.ndim != 1:
+            raise AudioFormatError("output audio must be mono")
+        if self.sample_rate != output_sample_rate:
+            raise AudioFormatError(
+                f"output sample rate must be {output_sample_rate}, got {self.sample_rate}"
+            )
+
 
 @dataclass
 class AudioTrackInfo:
@@ -45,12 +85,3 @@ class AudioTrackInfo:
     num_channels: int
     participant_identity: str
     track_sid: str = ""
-
-
-@dataclass
-class TTSConfig:
-    """Platform TTS parameters."""
-
-    speed: float | None = None  # e.g. 1.0
-    volume: float | None = None  # e.g. 1.0
-    mood: str | None = None  # e.g. "cheerful"
