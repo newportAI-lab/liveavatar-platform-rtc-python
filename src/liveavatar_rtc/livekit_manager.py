@@ -331,7 +331,11 @@ class LiveKitManager:
     ) -> None:
         async with self._user_audio_lock:
             if track.sid == self._user_audio_track_sid:
+                track_sid = self._user_audio_track_sid
                 await self._clear_user_audio()
+                await self.events.dispatch(
+                    "user_audio_track_unsubscribed", track_sid
+                )
 
     async def _on_data_received(self, packet: rtc.DataPacket) -> None:
         if packet.topic != DATA_TOPIC:

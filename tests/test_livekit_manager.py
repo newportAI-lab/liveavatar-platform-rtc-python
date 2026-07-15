@@ -8,7 +8,8 @@ from livekit import rtc
 from livekit.rtc.event_emitter import EventEmitter
 
 from liveavatar_rtc.errors import DataChannelProtocolError
-from liveavatar_rtc.types import AudioFrame, DataChannelEvent
+from liveavatar_rtc.session import Session
+from liveavatar_rtc.types import AudioFrame, AudioTrackInfo, DataChannelEvent
 
 
 # ── Fixture ──────────────────────────────────────────────────
@@ -598,6 +599,8 @@ class TestTrackEvents:
         current_stream = AsyncMock()
         mgr._user_audio_stream = current_stream
         mgr._user_audio_track_sid = "new"
+        unsubscribed = AsyncMock()
+        mgr.events.add("user_audio_track_unsubscribed", unsubscribed)
 
         await mgr._on_track_unsubscribed(
             MagicMock(sid="old"), MagicMock(), MagicMock()
@@ -605,6 +608,7 @@ class TestTrackEvents:
 
         assert mgr._user_audio_track_sid == "new"
         current_stream.aclose.assert_not_awaited()
+        unsubscribed.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_non_microphone_audio_is_skipped(self, lk):
@@ -661,6 +665,26 @@ class TestTrackEvents:
 
         stream.aclose.assert_awaited_once_with()
         assert mgr._user_audio_track_sid is None
+
+    @pytest.mark.asyncio
+    async def test_track_unsubscribe_event_clears_session_audio_state(self, lk):
+        mgr = _mgr(lk)
+        session = Session(mgr)
+        stream = AsyncMock()
+        mgr._user_audio_stream = stream
+        mgr._user_audio_track_sid = "TR_cleanup"
+        await mgr.events.dispatch(
+            "user_audio_track_subscribed",
+            AudioTrackInfo(16000, 1, "user_alice", "TR_cleanup"),
+        )
+        assert session.is_user_audio_subscribed
+
+        await mgr._on_track_unsubscribed(
+            MagicMock(sid="TR_cleanup"), MagicMock(), MagicMock()
+        )
+
+        assert not session.is_user_audio_subscribed
+        stream.aclose.assert_awaited_once_with()
 
     @pytest.mark.asyncio
     async def test_on_track_unsubscribed_unknown_track_noop(self, lk):
