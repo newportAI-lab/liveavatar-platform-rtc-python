@@ -53,6 +53,7 @@ class Session:
         self._closing = False
         self._closed = False
         self._output_task: asyncio.Task[None] | None = None
+        self._close_task: asyncio.Task[None] | None = None
 
         self._user_event = asyncio.Event()
         self._scene_ready_event = asyncio.Event()
@@ -247,6 +248,22 @@ class Session:
             )
         )
 
+    async def interrupt(self, request_id: str | None = None) -> None:
+        self._ensure_open()
+        task = self._output_task
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        await self._lk.clear_output_queue()
+        await self._lk.send_data_event(
+            DataChannelEvent(event="control.interrupt", request_id=request_id)
+        )
+        await self._events.dispatch("interrupted", request_id)
+
     async def send_voice_start(self, request_id: str) -> None:
         await self.send_custom_event("input.voice.start", request_id=request_id)
 
@@ -283,8 +300,22 @@ class Session:
     async def close(self) -> None:
         if self._closed:
             return
-        self._closing = True
+        if self._close_task is None:
+            self._closing = True
+            self._close_task = asyncio.create_task(self._close())
+        await asyncio.shield(self._close_task)
+
+    async def _close(self) -> None:
+        task = self._output_task
+        if task is not None and not task.done():
+            task.cancel()
         try:
+            if task is not None:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
             await self._lk.disconnect()
         finally:
             self._mark_closed()
+            await self._events.dispatch("closed")

@@ -46,6 +46,8 @@ class LiveKitManager:
         self._user_audio_lock = asyncio.Lock()
         self._room_event_tasks: set[asyncio.Task] = set()
         self._closing = False
+        self._closed = False
+        self._disconnect_task: asyncio.Task[None] | None = None
         self._ready_event = asyncio.Event()
 
         self.events = EventDispatcher()
@@ -90,11 +92,18 @@ class LiveKitManager:
         await asyncio.wait_for(self._ready_event.wait(), timeout=timeout)
 
     async def disconnect(self) -> None:
-        await self._cancel_room_event_tasks()
-        async with self._user_audio_lock:
+        if self._disconnect_task is None:
             self._closing = True
+            self._disconnect_task = asyncio.create_task(
+                self._disconnect(asyncio.current_task())
+            )
+        await asyncio.shield(self._disconnect_task)
+
+    async def _disconnect(self, caller: asyncio.Task | None) -> None:
+        await self._cancel_room_event_tasks(caller)
+        async with self._user_audio_lock:
             await self._clear_user_audio()
-        await self._cancel_room_event_tasks()
+        await self._cancel_room_event_tasks(caller)
         tasks = list(self._stream_tasks.values())
         for task in tasks:
             task.cancel()
@@ -107,17 +116,35 @@ class LiveKitManager:
                 logger.debug("Error awaiting cancelled task", exc_info=True)
         self._stream_tasks.clear()
         self._audio_streams.clear()
+        source_error: BaseException | None = None
         if self._audio_source:
-            await self._audio_source.aclose()
-        await self._room.disconnect()
-        logger.info("LiveKit disconnected")
+            try:
+                await self._audio_source.aclose()
+            except BaseException as exc:
+                source_error = exc
+        try:
+            await self._room.disconnect()
+            logger.info("LiveKit disconnected")
+        except BaseException:
+            if source_error is None:
+                raise
+            logger.debug(
+                "Room disconnect failed after audio source close failure",
+                exc_info=True,
+            )
+        finally:
+            self._closed = True
+        if source_error is not None:
+            raise source_error
 
-    async def _cancel_room_event_tasks(self) -> None:
+    async def _cancel_room_event_tasks(
+        self, protected: asyncio.Task | None = None
+    ) -> None:
         current = asyncio.current_task()
         tasks = [
             task
             for task in self._room_event_tasks
-            if task is not current and not task.done()
+            if task is not current and task is not protected and not task.done()
         ]
         for task in tasks:
             task.cancel()
@@ -139,6 +166,10 @@ class LiveKitManager:
         target = np.frombuffer(lk_frame.data.cast("b"), dtype=np.int16)
         target[:] = frame.data
         await self._audio_source.capture_frame(lk_frame)
+
+    async def clear_output_queue(self) -> None:
+        if self._audio_source is not None:
+            self._audio_source.clear_queue()
 
     # ── Data Channel ────────────────────────────────────────
 

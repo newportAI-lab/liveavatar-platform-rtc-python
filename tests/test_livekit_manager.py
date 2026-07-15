@@ -32,6 +32,7 @@ def lk():
     mock_audio_source = MagicMock()
     mock_audio_source.aclose = AsyncMock()
     mock_audio_source.capture_frame = AsyncMock()
+    mock_audio_source.clear_queue = MagicMock()
 
     mock_audio_track = MagicMock()
 
@@ -171,6 +172,27 @@ class TestConnect:
 
 class TestDisconnect:
     @pytest.mark.asyncio
+    async def test_disconnect_is_idempotent(self, lk):
+        mgr = _mgr(lk)
+
+        await asyncio.gather(mgr.disconnect(), mgr.disconnect())
+
+        _src(lk).aclose.assert_awaited_once_with()
+        _room(lk).disconnect.assert_awaited_once_with()
+
+    @pytest.mark.asyncio
+    async def test_disconnect_preserves_source_error_and_still_disconnects_room(
+        self, lk
+    ):
+        mgr = _mgr(lk)
+        _src(lk).aclose.side_effect = RuntimeError("source close failed")
+
+        with pytest.raises(RuntimeError, match="source close failed"):
+            await mgr.disconnect()
+
+        _room(lk).disconnect.assert_awaited_once_with()
+
+    @pytest.mark.asyncio
     async def test_disconnects_and_cleans_up(self, lk):
         mgr = _mgr(lk)
 
@@ -254,6 +276,19 @@ class TestDisconnect:
 
 
 class TestPublishAudio:
+    @pytest.mark.asyncio
+    async def test_clear_output_queue_uses_connected_audio_source(self, lk):
+        await _mgr(lk).clear_output_queue()
+
+        _src(lk).clear_queue.assert_called_once_with()
+
+    @pytest.mark.asyncio
+    async def test_clear_output_queue_without_source_is_noop(self, lk):
+        mgr = _mgr(lk)
+        mgr._audio_source = None
+
+        await mgr.clear_output_queue()
+
     @pytest.mark.asyncio
     async def test_publishes_frame_to_source(self, lk):
         mgr = _mgr(lk)

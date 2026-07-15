@@ -24,6 +24,7 @@ def manager():
     type(manager).user_token = PropertyMock(return_value="user-tok-test")
     manager.events = EventDispatcher()
     manager.publish_audio_frame = AsyncMock()
+    manager.clear_output_queue = AsyncMock()
     manager.send_data_event = AsyncMock()
     manager.disconnect = AsyncMock()
     return manager
@@ -380,3 +381,68 @@ async def test_close_is_idempotent(session, manager):
     await session.close()
     await session.close()
     manager.disconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_interrupt_cancels_stream_sends_control_and_emits_local_event(
+    session, manager
+):
+    interrupted = []
+    started = asyncio.Event()
+
+    async def blocking_frames():
+        started.set()
+        await asyncio.Event().wait()
+        yield AudioFrame.from_pcm(b"\x00\x00", 24000)
+
+    session.on("interrupted")(lambda request_id: interrupted.append(request_id))
+    stream_task = asyncio.create_task(session.publish_audio_stream(blocking_frames()))
+    await started.wait()
+
+    await session.interrupt("req-9")
+
+    with pytest.raises(asyncio.CancelledError):
+        await stream_task
+    manager.clear_output_queue.assert_awaited_once_with()
+    manager.send_data_event.assert_awaited_once_with(
+        DataChannelEvent(event="control.interrupt", request_id="req-9")
+    )
+    assert interrupted == ["req-9"]
+
+
+@pytest.mark.asyncio
+async def test_close_cancels_active_stream_and_emits_closed_once(session, manager):
+    closed = []
+    started = asyncio.Event()
+
+    async def blocking_frames():
+        started.set()
+        await asyncio.Event().wait()
+        yield AudioFrame.from_pcm(b"\x00\x00", 24000)
+
+    session.on("closed")(lambda: closed.append(True))
+    stream_task = asyncio.create_task(session.publish_audio_stream(blocking_frames()))
+    await started.wait()
+
+    await asyncio.gather(session.close(), session.close())
+
+    with pytest.raises(asyncio.CancelledError):
+        await stream_task
+    manager.disconnect.assert_awaited_once_with()
+    assert closed == [True]
+
+
+@pytest.mark.asyncio
+async def test_close_preserves_disconnect_error_when_closed_handler_fails(
+    session, manager
+):
+    manager.disconnect.side_effect = RuntimeError("disconnect failed")
+
+    @session.on("closed")
+    async def fail_closed_handler():
+        raise ValueError("handler failed")
+
+    with pytest.raises(RuntimeError, match="disconnect failed"):
+        await session.close()
+
+    assert session.is_closed
