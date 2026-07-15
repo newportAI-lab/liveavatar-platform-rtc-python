@@ -255,9 +255,11 @@ class Session:
             if not task.done():
                 task.cancel()
             try:
-                await task
+                await asyncio.shield(task)
             except asyncio.CancelledError:
-                pass
+                current = asyncio.current_task()
+                if current is not None and current.cancelling():
+                    raise
         await self._lk.clear_output_queue()
         await self._lk.send_data_event(
             DataChannelEvent(event="control.interrupt", request_id=request_id)
@@ -298,11 +300,16 @@ class Session:
         )
 
     async def close(self) -> None:
+        task = self._close_task
+        if task is not None:
+            if task is asyncio.current_task():
+                return
+            await asyncio.shield(task)
+            return
         if self._closed:
             return
-        if self._close_task is None:
-            self._closing = True
-            self._close_task = asyncio.create_task(self._close())
+        self._closing = True
+        self._close_task = asyncio.create_task(self._close())
         await asyncio.shield(self._close_task)
 
     async def _close(self) -> None:

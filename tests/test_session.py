@@ -411,6 +411,38 @@ async def test_interrupt_cancels_stream_sends_control_and_emits_local_event(
 
 
 @pytest.mark.asyncio
+async def test_interrupt_caller_cancellation_is_not_swallowed(session, manager):
+    started = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+
+    async def blocking_frames():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleanup_started.set()
+            await release_cleanup.wait()
+        yield AudioFrame.from_pcm(b"\x00\x00", 24000)
+
+    stream_task = asyncio.create_task(session.publish_audio_stream(blocking_frames()))
+    await started.wait()
+    interrupt_task = asyncio.create_task(session.interrupt("req-cancelled"))
+    await cleanup_started.wait()
+
+    interrupt_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await interrupt_task
+
+    manager.clear_output_queue.assert_not_awaited()
+    manager.send_data_event.assert_not_awaited()
+    assert not stream_task.done()
+    release_cleanup.set()
+    with pytest.raises(asyncio.CancelledError):
+        await stream_task
+
+
+@pytest.mark.asyncio
 async def test_close_cancels_active_stream_and_emits_closed_once(session, manager):
     closed = []
     started = asyncio.Event()
@@ -446,3 +478,59 @@ async def test_close_preserves_disconnect_error_when_closed_handler_fails(
         await session.close()
 
     assert session.is_closed
+
+
+@pytest.mark.asyncio
+async def test_close_callers_wait_for_blocked_closed_handler(session):
+    handler_started = asyncio.Event()
+    release_handler = asyncio.Event()
+
+    @session.on("closed")
+    async def block_closed_handler():
+        handler_started.set()
+        await release_handler.wait()
+
+    first = asyncio.create_task(session.close())
+    await handler_started.wait()
+    second = asyncio.create_task(session.close())
+    await asyncio.sleep(0)
+
+    assert not second.done()
+    release_handler.set()
+    await asyncio.gather(first, second)
+
+
+@pytest.mark.asyncio
+async def test_close_after_remote_disconnect_waits_for_active_shutdown(session, manager):
+    disconnect_started = asyncio.Event()
+    release_disconnect = asyncio.Event()
+
+    async def block_disconnect():
+        disconnect_started.set()
+        await release_disconnect.wait()
+
+    manager.disconnect.side_effect = block_disconnect
+    first = asyncio.create_task(session.close())
+    await disconnect_started.wait()
+    await manager.events.dispatch("disconnected", "remote close")
+    second = asyncio.create_task(session.close())
+    await asyncio.sleep(0)
+
+    assert session.is_closed
+    assert not second.done()
+    release_disconnect.set()
+    await asyncio.gather(first, second)
+
+
+@pytest.mark.asyncio
+async def test_closed_handler_can_reenter_close_without_self_await(session):
+    handler_returned = asyncio.Event()
+
+    @session.on("closed")
+    async def close_again():
+        await session.close()
+        handler_returned.set()
+
+    await asyncio.wait_for(session.close(), timeout=0.1)
+
+    assert handler_returned.is_set()
