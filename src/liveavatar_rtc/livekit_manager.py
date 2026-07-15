@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 from livekit import rtc
 
-from .errors import DataChannelProtocolError
+from .errors import DataChannelProtocolError, RTCConnectionError
 from .event_dispatcher import EventDispatcher
 from .types import AudioFrame, AudioTrackInfo, DataChannelEvent
 
@@ -129,19 +129,15 @@ class LiveKitManager:
 
     async def publish_audio_frame(self, frame: AudioFrame) -> None:
         if self._audio_source is None:
-            logger.warning("publish_audio_frame called before connect; frame dropped")
-            return
+            raise RTCConnectionError("audio source is not connected")
+        frame.validate_for_output(self._output_sample_rate)
         lk_frame = rtc.AudioFrame.create(
-            sample_rate=frame.sample_rate,
-            num_channels=frame.num_channels,
-            samples_per_channel=len(frame.data),
+            sample_rate=self._output_sample_rate,
+            num_channels=1,
+            samples_per_channel=frame.data.size,
         )
-        lk_data = lk_frame.data
-        if isinstance(lk_data, memoryview):
-            lk_data = lk_data.cast("b")
-        target = np.frombuffer(lk_data, dtype=np.int16)
-        n = min(len(target), len(frame.data))
-        target[:n] = frame.data[:n]
+        target = np.frombuffer(lk_frame.data.cast("b"), dtype=np.int16)
+        target[:] = frame.data
         await self._audio_source.capture_frame(lk_frame)
 
     # ── Data Channel ────────────────────────────────────────

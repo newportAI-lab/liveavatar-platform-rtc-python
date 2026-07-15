@@ -7,7 +7,11 @@ import pytest
 from livekit import rtc
 from livekit.rtc.event_emitter import EventEmitter
 
-from liveavatar_rtc.errors import DataChannelProtocolError
+from liveavatar_rtc.errors import (
+    AudioFormatError,
+    DataChannelProtocolError,
+    RTCConnectionError,
+)
 from liveavatar_rtc.session import Session
 from liveavatar_rtc.types import AudioFrame, AudioTrackInfo, DataChannelEvent
 
@@ -32,7 +36,7 @@ def lk():
     mock_audio_track = MagicMock()
 
     # Writable PCM buffer for publish_audio_frame tests
-    pcm_buffer = np.zeros(480, dtype=np.int16)
+    pcm_buffer = np.zeros(3, dtype=np.int16)
     mock_lk_frame = MagicMock()
     mock_lk_frame.data = memoryview(bytearray(pcm_buffer.tobytes()))
     mock_lk_frame.sample_rate = 24000
@@ -255,20 +259,59 @@ class TestPublishAudio:
         mgr = _mgr(lk)
         frame = AudioFrame(
             data=np.array([0, 1, 2], dtype=np.int16),
-            sample_rate=16000,
+            sample_rate=24000,
             num_channels=1,
         )
         await mgr.publish_audio_frame(frame)
         _src(lk).capture_frame.assert_called_once()
+        _af_create(lk).assert_called_once_with(
+            sample_rate=24000, num_channels=1, samples_per_channel=3
+        )
+        assert np.frombuffer(_lk_frame(lk).data, dtype=np.int16)[:3].tolist() == [
+            0,
+            1,
+            2,
+        ]
 
     @pytest.mark.asyncio
-    async def test_noop_when_audio_source_is_none(self, lk):
+    async def test_rejects_wrong_output_rate(self, lk):
+        frame = AudioFrame.from_pcm(b"\x00\x00", sample_rate=16000)
+
+        with pytest.raises(AudioFormatError, match="24000"):
+            await _mgr(lk).publish_audio_frame(frame)
+
+        _src(lk).capture_frame.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_raises_when_audio_source_is_none(self, lk):
         mgr = _mgr(lk)
         mgr._audio_source = None
         frame = AudioFrame(
-            data=np.array([0], dtype=np.int16), sample_rate=16000, num_channels=1
+            data=np.array([0], dtype=np.int16), sample_rate=24000, num_channels=1
         )
-        await mgr.publish_audio_frame(frame)  # Should not raise
+        with pytest.raises(RTCConnectionError, match="not connected"):
+            await mgr.publish_audio_frame(frame)
+
+    @pytest.mark.asyncio
+    async def test_copies_samples_into_real_livekit_frame_buffer(self):
+        source = MagicMock(capture_frame=AsyncMock())
+        with patch("livekit.rtc.Room"):
+            from liveavatar_rtc.livekit_manager import LiveKitManager
+
+            manager = LiveKitManager("session", "wss://sfu", "token")
+        manager._audio_source = source
+        frame = AudioFrame.from_pcm(
+            b"\x01\x00\xfe\xff\x03\x00", sample_rate=24000
+        )
+
+        await manager.publish_audio_frame(frame)
+
+        captured = source.capture_frame.await_args.args[0]
+        assert np.frombuffer(captured.data.cast("b"), dtype=np.int16).tolist() == [
+            1,
+            -2,
+            3,
+        ]
 
 
 class TestSendData:

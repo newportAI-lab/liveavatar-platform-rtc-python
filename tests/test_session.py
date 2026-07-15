@@ -4,7 +4,12 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock
 import numpy as np
 import pytest
 
-from liveavatar_rtc.errors import SessionClosedError, SessionWaitTimeoutError
+from liveavatar_rtc.errors import (
+    AudioFormatError,
+    AudioPublishError,
+    SessionClosedError,
+    SessionWaitTimeoutError,
+)
 from liveavatar_rtc.event_dispatcher import EventDispatcher
 from liveavatar_rtc.session import Session
 from liveavatar_rtc.types import AudioFrame, AudioTrackInfo, DataChannelEvent
@@ -152,9 +157,102 @@ async def test_disconnected_closes_session_and_resolves_waiters(session, manager
 
 @pytest.mark.asyncio
 async def test_publish_audio_delegates(session, manager):
-    frame = AudioFrame(np.array([0], dtype=np.int16), 16000, 1)
+    frame = AudioFrame(np.array([0], dtype=np.int16), 24000, 1)
     await session.publish_audio(frame)
     manager.publish_audio_frame.assert_awaited_once_with(frame)
+
+
+@pytest.mark.asyncio
+async def test_publish_stream_preserves_order(session, manager):
+    published = []
+
+    async def capture(frame):
+        published.append(int(frame.data[0]))
+
+    async def frames():
+        for value in (1, 2, 3):
+            yield AudioFrame.from_pcm(value.to_bytes(2, "little", signed=True), 24000)
+
+    manager.publish_audio_frame.side_effect = capture
+
+    await session.publish_audio_stream(frames())
+
+    assert published == [1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_publish_stream_rejects_second_active_stream(session, manager):
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def capture(frame):
+        started.set()
+        await release.wait()
+
+    async def frames():
+        yield AudioFrame.from_pcm(b"\x01\x00", 24000)
+
+    manager.publish_audio_frame.side_effect = capture
+    first = asyncio.create_task(session.publish_audio_stream(frames()))
+    await started.wait()
+
+    with pytest.raises(AudioPublishError, match="already active"):
+        await session.publish_audio_stream(frames())
+
+    release.set()
+    await first
+
+
+@pytest.mark.asyncio
+async def test_publish_stream_dispatches_typed_failure(session, manager):
+    errors = []
+
+    @session.on("error")
+    async def record(error):
+        errors.append(error)
+
+    async def frames():
+        yield AudioFrame.from_pcm(b"\x01\x00", 24000)
+
+    manager.publish_audio_frame.side_effect = RuntimeError("capture failed")
+
+    with pytest.raises(AudioPublishError, match="failed to publish") as caught:
+        await session.publish_audio_stream(frames())
+
+    assert errors == [caught.value]
+    assert isinstance(caught.value.__cause__, RuntimeError)
+
+
+@pytest.mark.asyncio
+async def test_publish_stream_preserves_typed_format_failure(session, manager):
+    async def frames():
+        yield AudioFrame.from_pcm(b"\x01\x00", 16000)
+
+    manager.publish_audio_frame.side_effect = AudioFormatError("must be 24000")
+
+    with pytest.raises(AudioFormatError, match="24000"):
+        await session.publish_audio_stream(frames())
+
+
+@pytest.mark.asyncio
+async def test_publish_after_close_fails(session, manager):
+    await session.close()
+
+    with pytest.raises(SessionClosedError):
+        await session.publish_audio(AudioFrame.from_pcm(b"\x00\x00", 24000))
+
+    manager.publish_audio_frame.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_publish_stream_after_close_fails(session):
+    async def frames():
+        yield AudioFrame.from_pcm(b"\x00\x00", 24000)
+
+    await session.close()
+
+    with pytest.raises(SessionClosedError):
+        await session.publish_audio_stream(frames())
 
 
 @pytest.mark.asyncio

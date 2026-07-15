@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import AsyncIterable, Callable
 
-from .errors import SessionClosedError, SessionWaitTimeoutError
+from .errors import (
+    AudioFormatError,
+    AudioPublishError,
+    SessionClosedError,
+    SessionWaitTimeoutError,
+)
 from .event_dispatcher import Callback, EventDispatcher
 from .livekit_manager import LiveKitManager
 from .types import AudioFrame, DataChannelEvent
@@ -47,6 +52,7 @@ class Session:
         self._user_audio_subscribed = False
         self._closing = False
         self._closed = False
+        self._output_task: asyncio.Task[None] | None = None
 
         self._user_event = asyncio.Event()
         self._scene_ready_event = asyncio.Event()
@@ -186,7 +192,38 @@ class Session:
         await self._wait_for(self._scene_ready_event, "scene_ready", timeout)
 
     async def publish_audio(self, frame: AudioFrame) -> None:
+        self._ensure_open()
         await self._lk.publish_audio_frame(frame)
+
+    def _ensure_open(self) -> None:
+        if self._closing or self._closed:
+            raise SessionClosedError(f"session {self.session_id} is closed")
+
+    async def publish_audio_stream(
+        self, frames: AsyncIterable[AudioFrame]
+    ) -> None:
+        self._ensure_open()
+        if self._output_task is not None and not self._output_task.done():
+            raise AudioPublishError("an audio stream is already active")
+
+        async def publish() -> None:
+            async for frame in frames:
+                self._ensure_open()
+                await self.publish_audio(frame)
+
+        self._output_task = asyncio.create_task(publish())
+        try:
+            await self._output_task
+        except asyncio.CancelledError:
+            raise
+        except (AudioFormatError, SessionClosedError):
+            raise
+        except Exception as exc:
+            error = AudioPublishError("failed to publish audio stream")
+            await self._events.dispatch(ERROR, error)
+            raise error from exc
+        finally:
+            self._output_task = None
 
     async def send_custom_event(
         self,
