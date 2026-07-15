@@ -357,8 +357,7 @@ class TestSendData:
         payload = json.loads(call_args[0][0])
         assert payload["event"] == "test.event"
         assert payload["data"] == {"key": "value"}
-        assert call_args.kwargs.get("reliable") is True
-        assert call_args.kwargs.get("topic") == "liveavatar"
+        assert call_args.kwargs == {"reliable": True}
 
     @pytest.mark.asyncio
     async def test_sends_data_with_none_payload(self, lk):
@@ -389,7 +388,7 @@ class TestSendData:
             "seq": 0,
             "timestamp": 99,
         }
-        assert call.kwargs == {"reliable": True, "topic": "liveavatar"}
+        assert call.kwargs == {"reliable": True}
 
 
 class TestRoomEvents:
@@ -513,15 +512,36 @@ class TestDataChannelEvents:
         ]
 
     @pytest.mark.asyncio
-    async def test_non_liveavatar_topic_is_ignored(self, lk):
+    async def test_arbitrary_topic_is_diagnostic_metadata_only(self, lk):
         handler = AsyncMock()
         _mgr(lk).events.add("data_channel_event", handler)
 
         await _mgr(lk)._on_data_received(
-            MagicMock(topic="other", participant=None, data=b"{}")
+            MagicMock(
+                topic="custom-observer-topic",
+                participant=None,
+                data=json.dumps({"event": "scene.ready"}).encode(),
+            )
         )
 
-        handler.assert_not_awaited()
+        event = handler.await_args.args[0]
+        assert event.event == "scene.ready"
+        assert event.topic == "custom-observer-topic"
+
+    @pytest.mark.asyncio
+    async def test_topicless_browser_system_event_is_dispatched(self, lk):
+        handler = AsyncMock()
+        _mgr(lk).events.add("data_channel_event", handler)
+
+        await _mgr(lk)._on_data_received(MagicMock(
+            topic="",
+            participant=MagicMock(identity="user"),
+            data=json.dumps({"event": "scene.ready"}).encode(),
+        ))
+
+        event = handler.await_args.args[0]
+        assert event.event == "scene.ready"
+        assert event.topic == ""
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -891,6 +911,28 @@ class TestDataChannel:
 
 
 class TestConsumeAudio:
+    @pytest.mark.asyncio
+    async def test_accepts_current_livekit_audio_frame_without_timestamp(self, lk):
+        mgr = _mgr(lk)
+        frames = []
+
+        @mgr.events.on("user_audio_frame")
+        async def handler(frame):
+            frames.append(frame)
+
+        pcm = np.array([1, 2, 3], dtype=np.int16)
+        livekit_frame = rtc.AudioFrame(
+            pcm.tobytes(), 16000, 1, len(pcm)
+        )
+        event = MagicMock(frame=livekit_frame)
+        stream = AsyncMock()
+        stream.__aiter__.return_value = [event]
+
+        await mgr._consume_audio_stream("TR_current", stream)
+
+        assert len(frames) == 1
+        assert frames[0].timestamp == 0
+
     @pytest.mark.asyncio
     async def test_dispatches_frames(self, lk):
         mgr = _mgr(lk)

@@ -13,7 +13,6 @@ from .types import AudioFrame, AudioTrackInfo, DataChannelEvent
 
 logger = logging.getLogger(__name__)
 
-DATA_TOPIC = "liveavatar"
 _KNOWN_DATA_EVENTS = {
     "scene.ready",
     "session.state",
@@ -183,9 +182,7 @@ class LiveKitManager:
 
     async def send_data(self, event: str, data: dict | None = None) -> None:
         payload = json.dumps({"event": event, "data": data or {}})
-        await self._room.local_participant.publish_data(
-            payload, reliable=True, topic=DATA_TOPIC
-        )
+        await self._room.local_participant.publish_data(payload, reliable=True)
 
     async def send_data_event(self, event: DataChannelEvent) -> None:
         envelope = {
@@ -199,9 +196,7 @@ class LiveKitManager:
         payload = json.dumps(
             {key: value for key, value in envelope.items() if value is not None}
         )
-        await self._room.local_participant.publish_data(
-            payload, reliable=True, topic=DATA_TOPIC
-        )
+        await self._room.local_participant.publish_data(payload, reliable=True)
 
     # ── Internal Events ─────────────────────────────────────
 
@@ -384,8 +379,6 @@ class LiveKitManager:
                 )
 
     async def _on_data_received(self, packet: rtc.DataPacket) -> None:
-        if packet.topic != DATA_TOPIC:
-            return
         try:
             message = json.loads(packet.data)
             if not isinstance(message, dict) or not isinstance(
@@ -450,7 +443,7 @@ class LiveKitManager:
                     data=arr,
                     sample_rate=lk_frame.sample_rate,
                     num_channels=lk_frame.num_channels,
-                    timestamp=lk_frame.timestamp_us,
+                    timestamp=getattr(lk_frame, "timestamp_us", 0),
                 )
                 await self.events.dispatch("user_audio_frame", audio_frame)
         except asyncio.CancelledError:
