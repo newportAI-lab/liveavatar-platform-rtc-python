@@ -22,19 +22,24 @@ class LiveKitManager:
         sfu_url: str,
         agent_token: str,
         user_token: str = "",
-        sample_rate: int = 16000,
+        input_sample_rate: int = 16000,
+        output_sample_rate: int = 24000,
     ) -> None:
         self._session_id = session_id
         self._sfu_url = sfu_url
         self._agent_token = agent_token
         self._user_token = user_token
-        self._sample_rate = sample_rate
+        self._input_sample_rate = input_sample_rate
+        self._output_sample_rate = output_sample_rate
 
         self._room = rtc.Room()
         self._audio_source: rtc.AudioSource | None = None
         self._audio_track: rtc.LocalAudioTrack | None = None
         self._audio_streams: dict[str, rtc.AudioStream] = {}
         self._stream_tasks: dict[str, asyncio.Task] = {}
+        self._user_audio_stream: rtc.AudioStream | None = None
+        self._user_audio_task: asyncio.Task | None = None
+        self._user_audio_track_sid: str | None = None
         self._ready_event = asyncio.Event()
 
         self.events = EventDispatcher()
@@ -67,7 +72,7 @@ class LiveKitManager:
         logger.info("Connecting to LiveKit: url=%s identity=%s", self._sfu_url, self.identity)
         await self._room.connect(self._sfu_url, self._agent_token)
         self._audio_source = rtc.AudioSource(
-            sample_rate=self._sample_rate, num_channels=1, queue_size_ms=200
+            sample_rate=self._output_sample_rate, num_channels=1, queue_size_ms=200
         )
         self._audio_track = rtc.LocalAudioTrack.create_audio_track(
             "agent_audio", self._audio_source
@@ -91,6 +96,9 @@ class LiveKitManager:
                 logger.debug("Error awaiting cancelled task", exc_info=True)
         self._stream_tasks.clear()
         self._audio_streams.clear()
+        self._user_audio_stream = None
+        self._user_audio_task = None
+        self._user_audio_track_sid = None
         if self._audio_source:
             await self._audio_source.aclose()
         await self._room.disconnect()
@@ -129,10 +137,15 @@ class LiveKitManager:
         self._room.on("connected", self._on_connected)
         self._room.on("disconnected", self._on_disconnected)
         self._room.on("reconnecting", self._on_reconnecting)
+        self._room.on("reconnected", self._on_reconnected)
         self._room.on("track_subscribed", self._on_track_subscribed)
         self._room.on("track_unsubscribed", self._on_track_unsubscribed)
         self._room.on("data_received", self._on_data_received)
         self._room.on("participant_connected", self._on_participant_connected)
+        self._room.on("participant_disconnected", self._on_participant_disconnected)
+        self._room.on("track_muted", self._on_track_muted)
+        self._room.on("track_unmuted", self._on_track_unmuted)
+        self._room.on("connection_quality_changed", self._on_connection_quality_changed)
 
     async def _on_connected(self) -> None:
         logger.debug("LiveKit room connected")
@@ -142,11 +155,55 @@ class LiveKitManager:
 
     async def _on_reconnecting(self) -> None:
         logger.info("LiveKit reconnecting...")
+        await self.events.dispatch("reconnecting")
+
+    async def _on_reconnected(self) -> None:
+        await self.events.dispatch("reconnected")
+
+    def _is_user_identity(self, identity: str) -> bool:
+        return identity.startswith("user")
+
+    def _participant_role(self, identity: str) -> str | None:
+        if self._is_user_identity(identity):
+            return "user"
+        if identity == f"coordinator_{self._session_id}":
+            return "coordinator"
+        if identity == f"renderer_{self._session_id}":
+            return "renderer"
+        return None
 
     async def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
-        if participant.identity.startswith("user"):
+        role = self._participant_role(participant.identity)
+        if role == "user":
             self._ready_event.set()
-            await self.events.dispatch("user_joined", participant.identity)
+        if role:
+            await self.events.dispatch(f"{role}_joined", participant.identity)
+
+    async def _on_participant_disconnected(
+        self, participant: rtc.RemoteParticipant
+    ) -> None:
+        role = self._participant_role(participant.identity)
+        if role:
+            await self.events.dispatch(f"{role}_left", participant.identity)
+
+    async def _on_connection_quality_changed(
+        self, participant: rtc.Participant, quality: rtc.ConnectionQuality
+    ) -> None:
+        await self.events.dispatch(
+            "connection_quality_changed", participant.identity, quality
+        )
+
+    async def _on_track_muted(
+        self, participant: rtc.Participant, publication: rtc.TrackPublication
+    ) -> None:
+        if self._is_user_identity(participant.identity):
+            await self.events.dispatch("user_audio_track_muted", publication.sid)
+
+    async def _on_track_unmuted(
+        self, participant: rtc.Participant, publication: rtc.TrackPublication
+    ) -> None:
+        if self._is_user_identity(participant.identity):
+            await self.events.dispatch("user_audio_track_unmuted", publication.sid)
 
     async def _on_track_subscribed(
         self,
@@ -156,7 +213,10 @@ class LiveKitManager:
     ) -> None:
         if not isinstance(track, rtc.RemoteAudioTrack):
             return
-        if not participant.identity.startswith("user"):
+        if not self._is_user_identity(participant.identity):
+            return
+        source = getattr(publication, "source", None)
+        if source is not None and source != rtc.TrackSource.SOURCE_MICROPHONE:
             return
 
         logger.info(
@@ -167,13 +227,16 @@ class LiveKitManager:
 
         stream = rtc.AudioStream(
             track,
-            sample_rate=self._sample_rate,
+            sample_rate=self._input_sample_rate,
             num_channels=1,
         )
+        await self._clear_user_audio()
+        self._user_audio_stream = stream
+        self._user_audio_track_sid = track.sid
         self._audio_streams[track.sid] = stream
 
         info = AudioTrackInfo(
-            sample_rate=self._sample_rate,
+            sample_rate=self._input_sample_rate,
             num_channels=1,
             participant_identity=participant.identity,
             track_sid=track.sid,
@@ -181,7 +244,22 @@ class LiveKitManager:
         await self.events.dispatch("user_audio_track_subscribed", info)
 
         task = asyncio.create_task(self._consume_audio_stream(track.sid, stream))
+        self._user_audio_task = task
         self._stream_tasks[track.sid] = task
+
+    async def _clear_user_audio(self) -> None:
+        task = self._user_audio_task
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        self._audio_streams.clear()
+        self._stream_tasks.clear()
+        self._user_audio_stream = None
+        self._user_audio_task = None
+        self._user_audio_track_sid = None
 
     async def _on_track_unsubscribed(
         self,
@@ -189,11 +267,13 @@ class LiveKitManager:
         publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
     ) -> None:
-        if track.sid in self._audio_streams:
-            del self._audio_streams[track.sid]
-        if track.sid in self._stream_tasks:
-            self._stream_tasks[track.sid].cancel()
-            del self._stream_tasks[track.sid]
+        if track.sid == self._user_audio_track_sid:
+            await self._clear_user_audio()
+        else:
+            self._audio_streams.pop(track.sid, None)
+            task = self._stream_tasks.pop(track.sid, None)
+            if task:
+                task.cancel()
 
     async def _on_data_received(self, packet: rtc.DataPacket) -> None:
         try:

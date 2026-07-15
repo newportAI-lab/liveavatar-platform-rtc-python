@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
+from livekit import rtc
 
 from liveavatar_rtc.types import AudioFrame
 
@@ -52,7 +53,8 @@ def lk():
             session_id="test-session",
             sfu_url="wss://sfu.test.com",
             agent_token="test-token",
-            sample_rate=16000,
+            input_sample_rate=16000,
+            output_sample_rate=24000,
         )
         manager._room = mock_room
         manager._audio_source = mock_audio_source
@@ -120,7 +122,8 @@ class TestBasics:
             manager = LiveKitManager(
                 session_id="sess", sfu_url="wss://sfu", agent_token="tok"
             )
-            assert manager._sample_rate == 16000
+            assert manager._input_sample_rate == 16000
+            assert manager._output_sample_rate == 24000
 
 
 class TestConnect:
@@ -130,6 +133,9 @@ class TestConnect:
         await mgr.connect()
         _room(lk).connect.assert_called_once_with("wss://sfu.test.com", "test-token")
         _room(lk).local_participant.publish_track.assert_called_once_with(_trk(lk))
+        rtc.AudioSource.assert_called_once_with(
+            sample_rate=24000, num_channels=1, queue_size_ms=200
+        )
 
     @pytest.mark.asyncio
     async def test_wait_until_ready_timeout(self, lk):
@@ -244,6 +250,59 @@ class TestRoomEvents:
     def test_on_reconnecting(self, lk):
         asyncio.run(_mgr(lk)._on_reconnecting())
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("identity", "event"),
+        [
+            ("coordinator_test-session", "coordinator_joined"),
+            ("renderer_test-session", "renderer_joined"),
+        ],
+    )
+    async def test_participant_roles_are_dispatched(self, lk, identity, event):
+        mgr = _mgr(lk)
+        received = []
+        mgr.events.add(event, AsyncMock(side_effect=received.append))
+        participant = MagicMock(identity=identity)
+
+        await mgr._on_participant_connected(participant)
+
+        assert received == [identity]
+
+    @pytest.mark.asyncio
+    async def test_participant_disconnected_dispatches_role_event(self, lk):
+        mgr = _mgr(lk)
+        handler = AsyncMock()
+        mgr.events.add("renderer_left", handler)
+
+        await mgr._on_participant_disconnected(
+            MagicMock(identity="renderer_test-session")
+        )
+
+        handler.assert_awaited_once_with("renderer_test-session")
+
+    @pytest.mark.asyncio
+    async def test_reconnect_and_quality_events_are_dispatched(self, lk):
+        mgr = _mgr(lk)
+        reconnecting = AsyncMock()
+        reconnected = AsyncMock()
+        quality = AsyncMock()
+        mgr.events.add("reconnecting", reconnecting)
+        mgr.events.add("reconnected", reconnected)
+        mgr.events.add("connection_quality_changed", quality)
+        participant = MagicMock(identity="user_alice")
+
+        await mgr._on_reconnecting()
+        await mgr._on_reconnected()
+        await mgr._on_connection_quality_changed(
+            participant, rtc.ConnectionQuality.QUALITY_GOOD
+        )
+
+        reconnecting.assert_awaited_once_with()
+        reconnected.assert_awaited_once_with()
+        quality.assert_awaited_once_with(
+            "user_alice", rtc.ConnectionQuality.QUALITY_GOOD
+        )
+
 
 class TestTrackEvents:
     @pytest.mark.asyncio
@@ -257,7 +316,7 @@ class TestTrackEvents:
 
         track = MagicMock(spec=["sid"])
         track.sid = "TR_test123"
-        publication = MagicMock()
+        publication = MagicMock(source=rtc.TrackSource.SOURCE_MICROPHONE)
         participant = MagicMock()
         participant.identity = "user_alice"
 
@@ -276,6 +335,56 @@ class TestTrackEvents:
         assert info.track_sid == "TR_test123"
         assert "TR_test123" in mgr._audio_streams
         assert "TR_test123" in mgr._stream_tasks
+        _stream_cls(lk).assert_called_once_with(
+            track, sample_rate=16000, num_channels=1
+        )
+
+    @pytest.mark.asyncio
+    async def test_republished_user_audio_replaces_old_consumer(self, lk):
+        mgr = _mgr(lk)
+        participant = MagicMock(identity="user_alice")
+        publication = MagicMock(source=rtc.TrackSource.SOURCE_MICROPHONE)
+        old_track = MagicMock(spec=["sid"])
+        old_track.sid = "old"
+        new_track = MagicMock(spec=["sid"])
+        new_track.sid = "new"
+        stream = AsyncMock()
+        stream.__aiter__.side_effect = lambda: iter(())
+        _stream_cls(lk).return_value = stream
+
+        with patch("liveavatar_rtc.livekit_manager.isinstance", return_value=True):
+            await mgr._on_track_subscribed(old_track, publication, participant)
+            old_task = mgr._user_audio_task
+            await mgr._on_track_subscribed(new_track, publication, participant)
+
+        assert old_task.cancelled()
+        assert mgr._user_audio_track_sid == "new"
+
+    @pytest.mark.asyncio
+    async def test_non_microphone_audio_is_skipped(self, lk):
+        publication = MagicMock(source=rtc.TrackSource.SOURCE_SCREENSHARE_AUDIO)
+        participant = MagicMock(identity="user_alice")
+        with patch("liveavatar_rtc.livekit_manager.isinstance", return_value=True):
+            await _mgr(lk)._on_track_subscribed(
+                MagicMock(), publication, participant
+            )
+        _stream_cls(lk).assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_track_mute_events_are_dispatched(self, lk):
+        mgr = _mgr(lk)
+        muted = AsyncMock()
+        unmuted = AsyncMock()
+        mgr.events.add("user_audio_track_muted", muted)
+        mgr.events.add("user_audio_track_unmuted", unmuted)
+        participant = MagicMock(identity="user_alice")
+        publication = MagicMock(sid="TR_user")
+
+        await mgr._on_track_muted(participant, publication)
+        await mgr._on_track_unmuted(participant, publication)
+
+        muted.assert_awaited_once_with("TR_user")
+        unmuted.assert_awaited_once_with("TR_user")
 
     @pytest.mark.asyncio
     async def test_on_track_subscribed_non_audio_skipped(self, lk):
