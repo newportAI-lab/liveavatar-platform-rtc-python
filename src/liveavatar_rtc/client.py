@@ -32,11 +32,13 @@ class PlatformRTCClient:
     ) -> None:
         if base_url is None:
             base_url = os.environ.get("LIVEAVATAR_BASE_URL", _DEFAULT_BASE_URL)
-        self._api = ApiClient(api_key=api_key, base_url=base_url, sandbox=sandbox)
+        self._api_key = api_key
+        self._base_url = base_url
+        self._sandbox = sandbox
+        self._api = self._new_api()
         self._avatar_id = avatar_id
         self._input_sample_rate = input_sample_rate
         self._output_sample_rate = output_sample_rate
-        self._sandbox = sandbox
         self._session: Session | None = None
         self._events = EventDispatcher()
         self._disconnect_task: asyncio.Task[None] | None = None
@@ -44,6 +46,24 @@ class PlatformRTCClient:
 
     def on(self, event: str) -> Callable[[Callback], Callback]:
         return self._events.on(event)
+
+    def _new_api(self) -> ApiClient:
+        return ApiClient(
+            api_key=self._api_key,
+            base_url=self._base_url,
+            sandbox=self._sandbox,
+        )
+
+    async def _prepare_connect_cycle(self) -> None:
+        if self._session is not None and self._session.is_closed:
+            await self.disconnect()
+        elif self._disconnect_task is not None:
+            await asyncio.shield(self._disconnect_task)
+
+        if self._api_closed:
+            self._api = self._new_api()
+            self._api_closed = False
+            self._disconnect_task = None
 
     async def _close_api(self) -> None:
         if self._api_closed:
@@ -73,6 +93,7 @@ class PlatformRTCClient:
     async def connect(self) -> Session:
         if self._session is not None and not self._session.is_closed:
             return self._session
+        await self._prepare_connect_cycle()
 
         try:
             info = await self._api.start_session(self._avatar_id)
@@ -114,9 +135,6 @@ class PlatformRTCClient:
             await self._cleanup_failed_connect(info.session_id, manager)
             raise
         return session
-
-    async def connect_async(self) -> Session:
-        return await self.connect()
 
     async def disconnect(self) -> None:
         if self._disconnect_task is None:

@@ -54,6 +54,7 @@ def test_client_has_split_sample_rates():
     assert signature.parameters["input_sample_rate"].default == 16000
     assert signature.parameters["output_sample_rate"].default == 24000
     assert "sample_rate" not in signature.parameters
+    assert not hasattr(PlatformRTCClient, "connect_async")
 
 
 @pytest.mark.asyncio
@@ -184,3 +185,106 @@ async def test_context_manager_preserves_body_error(client, api, manager_factory
             api.stop_session.side_effect = RuntimeError("cleanup")
             raise ValueError("body")
     api.aclose.assert_awaited_once()
+
+
+def cycle_api(session_id):
+    value = MagicMock()
+    value.start_session = AsyncMock(
+        return_value=SessionInfo(
+            session_id, f"agent-{session_id}", f"user-{session_id}", "wss://sfu"
+        )
+    )
+    value.stop_session = AsyncMock()
+    value.aclose = AsyncMock()
+    return value
+
+
+def cycle_manager(session_id):
+    value = MagicMock()
+    value.connect = AsyncMock()
+    value.disconnect = AsyncMock()
+    value.session_id = session_id
+    value.sfu_url = "wss://sfu"
+    value.user_token = f"user-{session_id}"
+    value.events = MagicMock()
+    return value
+
+
+@pytest.mark.asyncio
+async def test_reconnect_after_disconnect_uses_a_new_api_cycle():
+    first_api, second_api = cycle_api("one"), cycle_api("two")
+    first_manager, second_manager = cycle_manager("one"), cycle_manager("two")
+    with (
+        patch("liveavatar_rtc.client.ApiClient", side_effect=[first_api, second_api]),
+        patch(
+            "liveavatar_rtc.client.LiveKitManager",
+            side_effect=[first_manager, second_manager],
+        ),
+    ):
+        client = PlatformRTCClient("key", "avatar")
+        await client.connect()
+        await client.disconnect()
+        session = await client.connect()
+    assert session.session_id == "two"
+    second_api.start_session.assert_awaited_once_with("avatar")
+
+
+@pytest.mark.asyncio
+async def test_retry_after_connect_failure_uses_a_new_api_cycle():
+    first_api, second_api = cycle_api("one"), cycle_api("two")
+    bad_manager, good_manager = cycle_manager("one"), cycle_manager("two")
+    bad_manager.connect.side_effect = RuntimeError("connect failed")
+    with (
+        patch("liveavatar_rtc.client.ApiClient", side_effect=[first_api, second_api]),
+        patch(
+            "liveavatar_rtc.client.LiveKitManager",
+            side_effect=[bad_manager, good_manager],
+        ),
+    ):
+        client = PlatformRTCClient("key", "avatar")
+        with pytest.raises(RTCConnectionError):
+            await client.connect()
+        session = await client.connect()
+    assert session.session_id == "two"
+    second_api.start_session.assert_awaited_once_with("avatar")
+
+
+@pytest.mark.asyncio
+async def test_reconnect_after_direct_session_close_finalizes_old_cycle():
+    first_api, second_api = cycle_api("one"), cycle_api("two")
+    first_manager, second_manager = cycle_manager("one"), cycle_manager("two")
+    with (
+        patch("liveavatar_rtc.client.ApiClient", side_effect=[first_api, second_api]),
+        patch(
+            "liveavatar_rtc.client.LiveKitManager",
+            side_effect=[first_manager, second_manager],
+        ),
+    ):
+        client = PlatformRTCClient("key", "avatar")
+        old_session = await client.connect()
+        await old_session.close()
+        new_session = await client.connect()
+    assert new_session.session_id == "two"
+    first_api.stop_session.assert_awaited_once_with("one")
+    first_api.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_second_cycle_disconnect_cleans_the_new_session():
+    first_api, second_api = cycle_api("one"), cycle_api("two")
+    first_manager, second_manager = cycle_manager("one"), cycle_manager("two")
+    with (
+        patch("liveavatar_rtc.client.ApiClient", side_effect=[first_api, second_api]),
+        patch(
+            "liveavatar_rtc.client.LiveKitManager",
+            side_effect=[first_manager, second_manager],
+        ),
+    ):
+        client = PlatformRTCClient("key", "avatar")
+        await client.connect()
+        await client.disconnect()
+        await client.connect()
+        await client.disconnect()
+    second_manager.disconnect.assert_awaited_once()
+    second_api.stop_session.assert_awaited_once_with("two")
+    second_api.aclose.assert_awaited_once()
