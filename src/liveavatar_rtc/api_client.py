@@ -1,14 +1,7 @@
-from dataclasses import dataclass
-
 import httpx
 
-
-@dataclass
-class SessionInfo:
-    session_id: str
-    agent_token: str
-    user_token: str
-    sfu_url: str
+from .errors import APIError, SessionStartError
+from .types import SessionInfo
 
 
 class ApiClient:
@@ -37,38 +30,35 @@ class ApiClient:
             h["X-Env-Sandbox"] = "true"
         return h
 
-    async def start_session(self, avatar_id: str, session_id: str | None = None, voice_id: str | None = None) -> SessionInfo:
-        body: dict[str, str] = {"avatarId": avatar_id}
-        if session_id:
-            body["sessionId"] = session_id
-        if voice_id:
-            body["voiceId"] = voice_id
-
+    async def start_session(self, avatar_id: str) -> SessionInfo:
         resp = await self._client.post(
             f"{self._base_url}/v1/session/start",
             headers=self._headers(),
-            json=body,
+            json={"avatarId": avatar_id, "mode": "rtcAgent"},
         )
         resp.raise_for_status()
-        data: dict = resp.json()
+        payload: dict = resp.json()
 
-        if data.get("code") != 0:
-            raise ApiError(data.get("code"), data.get("message", "unknown error"))
+        if payload.get("code") != 0:
+            raise APIError(
+                payload.get("code"), payload.get("message", "unknown error")
+            )
 
-        d = data.get("data")
-        if not d:
-            raise ApiError(0, "response missing 'data' field")
-
-        session_id_val = d.get("sessionId") or ""
-        sfu_url_val = d.get("sfuUrl") or ""
-        if not session_id_val or not sfu_url_val:
-            raise ApiError(0, "response missing required fields: sessionId or sfuUrl")
+        data = payload.get("data") or {}
+        session_id = data.get("sessionId", "")
+        sfu_url = data.get("sfuUrl", "")
+        agent_token = data.get("agentToken", "")
+        if not session_id or not sfu_url or not agent_token:
+            raise SessionStartError(
+                "session response is missing sessionId, sfuUrl, or agentToken"
+            )
 
         return SessionInfo(
-            session_id=session_id_val,
-            agent_token=d.get("agentToken", ""),
-            user_token=d.get("userToken", ""),
-            sfu_url=sfu_url_val,
+            session_id=session_id,
+            agent_token=agent_token,
+            user_token=data.get("userToken", ""),
+            sfu_url=sfu_url,
+            output_sample_rate=data.get("outputSampleRate"),
         )
 
     async def stop_session(self, session_id: str) -> None:
@@ -80,13 +70,6 @@ class ApiClient:
         resp.raise_for_status()
         data: dict = resp.json()
         if data.get("code") != 0:
-            raise ApiError(
+            raise APIError(
                 data.get("code", -1), data.get("message", "unknown error")
             )
-
-
-class ApiError(Exception):
-    def __init__(self, code: int, message: str) -> None:
-        self.code = code
-        self.message = message
-        super().__init__(f"API error {code}: {message}")

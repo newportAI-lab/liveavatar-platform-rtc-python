@@ -1,9 +1,11 @@
+import inspect
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-from liveavatar_rtc.api_client import ApiClient, ApiError, SessionInfo
+from liveavatar_rtc import APIError, SessionInfo, SessionStartError
+from liveavatar_rtc.api_client import ApiClient
 
 
 @pytest.fixture
@@ -46,25 +48,39 @@ class TestApiClientStartSession:
 
         info = await api.start_session("avatar-1")
 
+        assert mock_http.post.call_args.kwargs["json"] == {
+            "avatarId": "avatar-1",
+            "mode": "rtcAgent",
+        }
         assert info.session_id == "sess-abc"
         assert info.agent_token == "agent-tok"
         assert info.sfu_url == "wss://sfu.example.com"
+        assert info.output_sample_rate is None
 
     @pytest.mark.asyncio
-    async def test_with_custom_session_id(self, client):
+    async def test_output_sample_rate(self, client):
         api, mock_http = client
         mock_resp = MagicMock(spec=httpx.Response)
         mock_resp.raise_for_status = MagicMock()
         mock_resp.json = MagicMock(return_value={
             "code": 0,
-            "data": {"sessionId": "sess-custom", "roomId": "room-1", "agentToken": "tok", "sfuUrl": "wss://sfu.example.com"},
+            "data": {
+                "sessionId": "sess-custom",
+                "agentToken": "tok",
+                "userToken": "user-tok",
+                "sfuUrl": "wss://sfu.example.com",
+                "outputSampleRate": 24000,
+            },
         })
         mock_http.post.return_value = mock_resp
 
-        await api.start_session("avatar-1", session_id="sess-custom")
+        info = await api.start_session("avatar-1")
 
-        body = mock_http.post.call_args.kwargs["json"]
-        assert body["sessionId"] == "sess-custom"
+        assert info.output_sample_rate == 24000
+
+    def test_has_only_avatar_id_parameter(self):
+        parameters = inspect.signature(ApiClient.start_session).parameters
+        assert list(parameters) == ["self", "avatar_id"]
 
     @pytest.mark.asyncio
     async def test_api_error_nonzero_code(self, client):
@@ -74,7 +90,7 @@ class TestApiClientStartSession:
         mock_resp.json = MagicMock(return_value={"code": 1001, "message": "Avatar not found"})
         mock_http.post.return_value = mock_resp
 
-        with pytest.raises(ApiError) as exc_info:
+        with pytest.raises(APIError) as exc_info:
             await api.start_session("bad-avatar")
         assert exc_info.value.code == 1001
         assert "Avatar not found" in str(exc_info.value)
@@ -87,7 +103,7 @@ class TestApiClientStartSession:
         mock_resp.json = MagicMock(return_value={"code": 5000})
         mock_http.post.return_value = mock_resp
 
-        with pytest.raises(ApiError) as exc_info:
+        with pytest.raises(APIError) as exc_info:
             await api.start_session("avatar-1")
         assert exc_info.value.code == 5000
         assert "unknown error" in str(exc_info.value)
@@ -100,9 +116,9 @@ class TestApiClientStartSession:
         mock_resp.json = MagicMock(return_value={"code": 0})
         mock_http.post.return_value = mock_resp
 
-        with pytest.raises(ApiError) as exc_info:
+        with pytest.raises(SessionStartError) as exc_info:
             await api.start_session("avatar-1")
-        assert "missing 'data' field" in str(exc_info.value)
+        assert "missing sessionId, sfuUrl, or agentToken" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_api_error_missing_required_fields(self, client):
@@ -112,9 +128,9 @@ class TestApiClientStartSession:
         mock_resp.json = MagicMock(return_value={"code": 0, "data": {"sessionId": ""}})
         mock_http.post.return_value = mock_resp
 
-        with pytest.raises(ApiError) as exc_info:
+        with pytest.raises(SessionStartError) as exc_info:
             await api.start_session("avatar-1")
-        assert "missing required fields" in str(exc_info.value)
+        assert "missing sessionId, sfuUrl, or agentToken" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_http_error(self, client):
@@ -179,7 +195,7 @@ class TestApiClientStartSession:
         assert "X-Env-Sandbox" not in headers
 
     @pytest.mark.asyncio
-    async def test_minimal_response_fields(self, client):
+    async def test_agent_token_is_required(self, client):
         api, mock_http = client
         mock_resp = MagicMock(spec=httpx.Response)
         mock_resp.raise_for_status = MagicMock()
@@ -189,11 +205,8 @@ class TestApiClientStartSession:
         })
         mock_http.post.return_value = mock_resp
 
-        info = await api.start_session("avatar-1")
-
-        assert info.session_id == "sess-min"
-        assert info.agent_token == ""
-        assert info.user_token == ""
+        with pytest.raises(SessionStartError):
+            await api.start_session("avatar-1")
 
 
 class TestApiClientStopSession:
@@ -235,7 +248,7 @@ class TestApiClientHeaders:
 
 class TestApiError:
     def test_str_representation(self):
-        error = ApiError(1001, "Avatar not found")
+        error = APIError(1001, "Avatar not found")
         assert "1001" in str(error)
         assert "Avatar not found" in str(error)
         assert error.code == 1001
