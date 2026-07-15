@@ -44,6 +44,7 @@ class LiveKitManager:
         self._user_audio_track_sid: str | None = None
         self._user_audio_lock = asyncio.Lock()
         self._room_event_tasks: set[asyncio.Task] = set()
+        self._closing = False
         self._ready_event = asyncio.Event()
 
         self.events = EventDispatcher()
@@ -88,8 +89,11 @@ class LiveKitManager:
         await asyncio.wait_for(self._ready_event.wait(), timeout=timeout)
 
     async def disconnect(self) -> None:
+        await self._cancel_room_event_tasks()
         async with self._user_audio_lock:
+            self._closing = True
             await self._clear_user_audio()
+        await self._cancel_room_event_tasks()
         tasks = list(self._stream_tasks.values())
         for task in tasks:
             task.cancel()
@@ -106,6 +110,19 @@ class LiveKitManager:
             await self._audio_source.aclose()
         await self._room.disconnect()
         logger.info("LiveKit disconnected")
+
+    async def _cancel_room_event_tasks(self) -> None:
+        current = asyncio.current_task()
+        tasks = [
+            task
+            for task in self._room_event_tasks
+            if task is not current and not task.done()
+        ]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._room_event_tasks.difference_update(tasks)
 
     # ── Audio Publishing ────────────────────────────────────
 
@@ -168,6 +185,11 @@ class LiveKitManager:
         logger.debug("LiveKit room connected")
 
     async def _on_disconnected(self, reason: rtc.DisconnectReason) -> None:
+        await self._cancel_room_event_tasks()
+        async with self._user_audio_lock:
+            self._closing = True
+            await self._clear_user_audio()
+        await self._cancel_room_event_tasks()
         await self.events.dispatch("disconnected", str(reason))
 
     async def _on_reconnecting(self) -> None:
@@ -243,6 +265,8 @@ class LiveKitManager:
         )
 
         async with self._user_audio_lock:
+            if self._closing:
+                return
             await self._clear_user_audio()
             stream = rtc.AudioStream(
                 track,

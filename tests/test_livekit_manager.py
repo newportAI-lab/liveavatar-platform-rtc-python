@@ -193,6 +193,53 @@ class TestDisconnect:
         stream.aclose.assert_awaited_once_with()
 
     @pytest.mark.asyncio
+    async def test_disconnect_guard_blocks_queued_track_subscription(self, lk):
+        mgr = _mgr(lk)
+        close_started = asyncio.Event()
+        release_close = asyncio.Event()
+        old_stream = AsyncMock()
+
+        async def block_close():
+            close_started.set()
+            await release_close.wait()
+
+        old_stream.aclose.side_effect = block_close
+        mgr._user_audio_stream = old_stream
+        _stream_cls(lk).reset_mock()
+        track = MagicMock(sid="late")
+        publication = MagicMock(source=rtc.TrackSource.SOURCE_MICROPHONE)
+        participant = MagicMock(identity="user_alice")
+
+        disconnect_task = asyncio.create_task(mgr.disconnect())
+        await close_started.wait()
+        with patch("liveavatar_rtc.livekit_manager.isinstance", return_value=True):
+            subscription_task = asyncio.create_task(
+                mgr._on_track_subscribed(track, publication, participant)
+            )
+            await asyncio.sleep(0)
+            assert not subscription_task.done()
+            release_close.set()
+            await asyncio.gather(disconnect_task, subscription_task)
+
+        _stream_cls(lk).assert_not_called()
+        assert mgr._user_audio_stream is None
+        assert mgr._user_audio_task is None
+        assert mgr._user_audio_track_sid is None
+
+    @pytest.mark.asyncio
+    async def test_disconnect_cancels_tracked_room_tasks_without_self_await(self, lk):
+        mgr = _mgr(lk)
+        current = asyncio.current_task()
+        blocked = asyncio.create_task(asyncio.Event().wait())
+        mgr._room_event_tasks.update((current, blocked))
+
+        await mgr.disconnect()
+
+        assert blocked.cancelled()
+        assert not current.cancelled()
+        assert mgr._room_event_tasks == {current}
+
+    @pytest.mark.asyncio
     async def test_disconnect_without_audio_source(self, lk):
         mgr = _mgr(lk)
         mgr._audio_source = None
