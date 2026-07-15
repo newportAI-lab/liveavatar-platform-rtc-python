@@ -11,7 +11,7 @@ from .errors import (
 )
 from .event_dispatcher import Callback, EventDispatcher
 from .livekit_manager import LiveKitManager
-from .types import AudioFrame, DataChannelEvent
+from .types import AudioFrame, DataChannelEvent, FrontendConnection
 
 SCENE_READY = "scene.ready"
 SESSION_STATE = "session.state"
@@ -44,6 +44,10 @@ class Session:
         self.session_id = lk_manager.session_id
         self.sfu_url = lk_manager.sfu_url
         self.user_token = lk_manager.user_token
+        self.connection = FrontendConnection(
+            user_token=lk_manager.user_token,
+            sfu_url=lk_manager.sfu_url,
+        )
         self._events = EventDispatcher()
 
         self._agent_connected = True

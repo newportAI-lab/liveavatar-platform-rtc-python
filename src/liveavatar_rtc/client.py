@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
-from .api_client import ApiClient, ApiError
+from .api_client import ApiClient
+from .errors import RTCConnectionError
 from .event_dispatcher import EventDispatcher
 from .livekit_manager import LiveKitManager
 from .session import Session
@@ -13,108 +15,151 @@ from .session import Session
 logger = logging.getLogger(__name__)
 
 Callback = Callable[..., Any]
-
 _DEFAULT_BASE_URL = "https://facemarket.ai/vih/dispatcher"
 
 
 class PlatformRTCClient:
-    """Main entry point for Live Avatar Platform RTC mode.
-
-    Usage::
-
-        client = PlatformRTCClient(api_key="lf_...", avatar_id="avatar-xxx")
-        async with client as session:
-            @session.on("user_audio_frame")
-            async def on_audio(frame):
-                ...  # ASR → LLM → TTS → session.publish_audio(...)
-    """
+    """Main entry point for Live Avatar Platform RTC agent sessions."""
 
     def __init__(
         self,
         api_key: str,
         avatar_id: str,
         base_url: str | None = None,
-        sample_rate: int = 16000,
+        input_sample_rate: int = 16000,
+        output_sample_rate: int = 24000,
         sandbox: bool = False,
     ) -> None:
         if base_url is None:
             base_url = os.environ.get("LIVEAVATAR_BASE_URL", _DEFAULT_BASE_URL)
         self._api = ApiClient(api_key=api_key, base_url=base_url, sandbox=sandbox)
         self._avatar_id = avatar_id
-        self._sample_rate = sample_rate
+        self._input_sample_rate = input_sample_rate
+        self._output_sample_rate = output_sample_rate
         self._sandbox = sandbox
         self._session: Session | None = None
         self._events = EventDispatcher()
-
-    # ── Connection Lifecycle Callbacks ──────────────────────
+        self._disconnect_task: asyncio.Task[None] | None = None
+        self._api_closed = False
 
     def on(self, event: str) -> Callable[[Callback], Callback]:
-        """Decorator for client-level events: "connection_established", "connection_closed"."""
         return self._events.on(event)
 
-    # ── Connect ─────────────────────────────────────────────
+    async def _close_api(self) -> None:
+        if self._api_closed:
+            return
+        self._api_closed = True
+        await self._api.aclose()
 
-    async def connect(self, voice_id: str | None = None) -> Session:
-        """Start a session: call /session/start, join LiveKit room as agent_{sessionId}.
+    @staticmethod
+    async def _try_cleanup(operation: Callable[[], Awaitable[None]], label: str) -> None:
+        try:
+            await operation()
+        except BaseException:
+            logger.debug("%s failed during cleanup", label, exc_info=True)
 
-        Args:
-            voice_id: Optional voice ID to override the avatar's default voice.
-        """
-        if self._session is not None:
+    async def _cleanup_failed_connect(
+        self, session_id: str, manager: LiveKitManager
+    ) -> None:
+        await self._try_cleanup(manager.disconnect, "RTC disconnect")
+        await self._cleanup_started_session(session_id)
+
+    async def _cleanup_started_session(self, session_id: str) -> None:
+        await self._try_cleanup(
+            lambda: self._api.stop_session(session_id), "remote session stop"
+        )
+        await self._try_cleanup(self._close_api, "HTTP client close")
+
+    async def connect(self) -> Session:
+        if self._session is not None and not self._session.is_closed:
             return self._session
 
-        info = await self._api.start_session(self._avatar_id, voice_id=voice_id)
-        logger.info(
-            "Session started: sessionId=%s", info.session_id
-        )
-
-        lk = LiveKitManager(
-            session_id=info.session_id,
-            sfu_url=info.sfu_url,
-            agent_token=info.agent_token,
-            user_token=info.user_token,
-            sample_rate=self._sample_rate,
-        )
-
         try:
-            await lk.connect()
-            await lk.wait_until_ready()
-        except Exception:
-            await lk.disconnect()
-            try:
-                await self._api.stop_session(info.session_id)
-            except Exception:
-                logger.debug(
-                    "stop_session failed for %s during failed connect cleanup",
-                    info.session_id,
-                    exc_info=True,
-                )
+            info = await self._api.start_session(self._avatar_id)
+        except BaseException:
+            await self._try_cleanup(self._close_api, "HTTP client close")
             raise
 
-        self._session = Session(lk)
-        await self._events.dispatch("connection_established", self._session)
-        return self._session
+        output_rate = info.output_sample_rate or self._output_sample_rate
+        try:
+            manager = LiveKitManager(
+                session_id=info.session_id,
+                sfu_url=info.sfu_url,
+                agent_token=info.agent_token,
+                user_token=info.user_token,
+                input_sample_rate=self._input_sample_rate,
+                output_sample_rate=output_rate,
+            )
+        except BaseException:
+            await self._cleanup_started_session(info.session_id)
+            raise
+
+        try:
+            await manager.connect()
+        except Exception as exc:
+            await self._cleanup_failed_connect(info.session_id, manager)
+            raise RTCConnectionError(
+                f"failed to connect RTC session {info.session_id}"
+            ) from exc
+        except BaseException:
+            await self._cleanup_failed_connect(info.session_id, manager)
+            raise
+
+        try:
+            session = Session(manager)
+            self._session = session
+            await self._events.dispatch("connection_established", session)
+        except BaseException:
+            self._session = None
+            await self._cleanup_failed_connect(info.session_id, manager)
+            raise
+        return session
 
     async def connect_async(self) -> Session:
-        """Alias for connect()."""
         return await self.connect()
 
-    # ── Disconnect ──────────────────────────────────────────
-
     async def disconnect(self) -> None:
-        if self._session is not None:
-            session_id = self._session.session_id
-            await self._session.close()
+        if self._disconnect_task is None:
+            self._disconnect_task = asyncio.create_task(self._disconnect())
+        await asyncio.shield(self._disconnect_task)
+
+    async def _disconnect(self) -> None:
+        session = self._session
+        self._session = None
+        primary: BaseException | None = None
+
+        async def run(operation: Callable[[], Awaitable[None]], label: str) -> None:
+            nonlocal primary
             try:
-                await self._api.stop_session(session_id)
-            except Exception:
-                logger.debug("stop_session failed for %s", session_id, exc_info=True)
-            await self._events.dispatch("connection_closed", session_id)
-            self._session = None
-        await self._api.aclose()
+                await operation()
+            except BaseException as exc:
+                if primary is None:
+                    primary = exc
+                else:
+                    logger.debug("%s failed after an earlier cleanup error", label, exc_info=True)
+
+        if session is not None:
+            await run(session.close, "RTC disconnect")
+            await run(
+                lambda: self._api.stop_session(session.session_id),
+                "remote session stop",
+            )
+            await run(
+                lambda: self._events.dispatch("connection_closed", session.session_id),
+                "connection_closed dispatch",
+            )
+        await run(self._close_api, "HTTP client close")
+        if primary is not None:
+            raise primary
 
     async def __aenter__(self) -> Session:
         return await self.connect()
 
     async def __aexit__(self, *args: Any) -> None:
-        await self.disconnect()
+        try:
+            await self.disconnect()
+        except BaseException:
+            if len(args) > 1 and args[1] is not None:
+                logger.debug("cleanup failed while leaving context", exc_info=True)
+                return
+            raise

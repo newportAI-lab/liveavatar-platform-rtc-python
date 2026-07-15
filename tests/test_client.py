@@ -1,226 +1,186 @@
 import asyncio
+import inspect
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from liveavatar_rtc.api_client import ApiError, SessionInfo
 from liveavatar_rtc.client import PlatformRTCClient
+from liveavatar_rtc.errors import APIError, RTCConnectionError, SessionStartError
+from liveavatar_rtc.types import FrontendConnection, SessionInfo
 
 
 @pytest.fixture
-def session_info():
-    return SessionInfo(
+def info():
+    return SessionInfo("sess-abc", "agent-token", "user-token", "wss://sfu")
+
+
+@pytest.fixture
+def api(info):
+    value = MagicMock()
+    value.start_session = AsyncMock(return_value=info)
+    value.stop_session = AsyncMock()
+    value.aclose = AsyncMock()
+    return value
+
+
+@pytest.fixture
+def manager():
+    value = MagicMock()
+    value.connect = AsyncMock()
+    value.disconnect = AsyncMock()
+    value.wait_for_user = AsyncMock(side_effect=AssertionError("must not wait"))
+    value.session_id = "sess-abc"
+    value.sfu_url = "wss://sfu"
+    value.user_token = "user-token"
+    value.events = MagicMock()
+    return value
+
+
+@pytest.fixture
+def manager_factory(manager):
+    with patch("liveavatar_rtc.client.LiveKitManager", return_value=manager) as factory:
+        yield factory
+
+
+@pytest.fixture
+def client(api):
+    value = PlatformRTCClient(api_key="key", avatar_id="avatar")
+    value._api = api
+    return value
+
+
+def test_client_has_split_sample_rates():
+    signature = inspect.signature(PlatformRTCClient)
+    assert signature.parameters["input_sample_rate"].default == 16000
+    assert signature.parameters["output_sample_rate"].default == 24000
+    assert "sample_rate" not in signature.parameters
+
+
+@pytest.mark.asyncio
+async def test_connect_returns_after_agent_track_publish(client, api, manager, manager_factory):
+    session = await asyncio.wait_for(client.connect(), timeout=0.1)
+    assert session.is_agent_connected
+    manager.connect.assert_awaited_once()
+    manager.wait_for_user.assert_not_called()
+    api.start_session.assert_awaited_once_with("avatar")
+    manager_factory.assert_called_once_with(
         session_id="sess-abc",
-        agent_token="agent-tok-123",
-        user_token="user-tok-456",
-        sfu_url="wss://sfu.test.com",
+        sfu_url="wss://sfu",
+        agent_token="agent-token",
+        user_token="user-token",
+        input_sample_rate=16000,
+        output_sample_rate=24000,
     )
 
 
-@pytest.fixture
-def mock_api(session_info):
-    api = MagicMock()
-    api.start_session = AsyncMock(return_value=session_info)
-    api.stop_session = AsyncMock()
-    api.aclose = AsyncMock()
-    return api
+@pytest.mark.asyncio
+async def test_server_output_rate_overrides_default(client, api, manager_factory):
+    api.start_session.return_value = SessionInfo(
+        "sess-abc", "agent-token", "user-token", "wss://sfu", 48000
+    )
+    await client.connect()
+    assert manager_factory.call_args.kwargs["output_sample_rate"] == 48000
 
 
-@pytest.fixture
-def mock_lk_manager():
-    with patch("liveavatar_rtc.client.LiveKitManager") as mock_cls:
-        lk = MagicMock()
-        lk.connect = AsyncMock()
-        lk.wait_until_ready = AsyncMock()
-        lk.disconnect = AsyncMock()
-        lk.session_id = "sess-abc"
-        lk.sfu_url = "wss://sfu.test.com"
-        lk.user_token = "user-tok-456"
-        mock_cls.return_value = lk
-        yield mock_cls, lk
+@pytest.mark.asyncio
+async def test_session_exposes_frontend_safe_connection(client, manager_factory):
+    session = await client.connect()
+    assert session.connection == FrontendConnection("user-token", "wss://sfu")
+    assert not hasattr(session.connection, "agent_token")
 
 
-class TestPlatformRTCClientInit:
-    def test_default_values(self):
-        client = PlatformRTCClient(api_key="key", avatar_id="avatar-1")
-        assert client._api._api_key == "key"
-        assert client._avatar_id == "avatar-1"
-        assert client._sample_rate == 16000
-        assert client._sandbox is False
-        assert client._session is None
-
-    def test_custom_values(self):
-        client = PlatformRTCClient(
-            api_key="key", avatar_id="avatar-2",
-            base_url="https://custom.example.com", sample_rate=24000, sandbox=True,
-        )
-        assert client._avatar_id == "avatar-2"
-        assert client._sample_rate == 24000
-        assert client._sandbox is True
-
-    def test_client_level_events(self):
-        client = PlatformRTCClient(api_key="key", avatar_id="avatar-1")
-        @client.on("connection_established")
-        async def h1(session): pass
-        @client.on("connection_closed")
-        async def h2(session_id): pass
-        assert len(client._events._handlers.get("connection_established", [])) == 1
-        assert len(client._events._handlers.get("connection_closed", [])) == 1
+@pytest.mark.asyncio
+async def test_connect_reuses_only_open_session(client, api, manager_factory):
+    first = await client.connect()
+    assert await client.connect() is first
+    api.start_session.assert_awaited_once()
 
 
-class TestConnect:
-    @pytest.mark.asyncio
-    async def test_connect_success(self, mock_api, mock_lk_manager, session_info):
-        mock_lk_cls, mock_lk = mock_lk_manager
-        client = PlatformRTCClient(api_key="key", avatar_id="avatar-123")
-        client._api = mock_api
-
-        session = await client.connect()
-
-        mock_api.start_session.assert_called_once_with("avatar-123", voice_id=None)
-        mock_lk_cls.assert_called_once_with(
-            session_id="sess-abc", sfu_url="wss://sfu.test.com",
-            agent_token="agent-tok-123", user_token="user-tok-456",
-            sample_rate=16000,
-        )
-        mock_lk.connect.assert_called_once()
-        mock_lk.wait_until_ready.assert_called_once()
-        assert session is not None
-        assert session.session_id == "sess-abc"
-        assert client._session is session
-
-    @pytest.mark.asyncio
-    async def test_connect_already_connected(self, mock_api, mock_lk_manager):
-        mock_lk_cls, mock_lk = mock_lk_manager
-        client = PlatformRTCClient(api_key="key", avatar_id="avatar-123")
-        client._api = mock_api
-
-        session1 = await client.connect()
-        session2 = await client.connect()
-
-        assert session1 is session2
-        mock_api.start_session.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_connect_api_error(self, mock_api):
-        mock_api.start_session.side_effect = ApiError(1001, "Avatar not found")
-        client = PlatformRTCClient(api_key="key", avatar_id="avatar-123")
-        client._api = mock_api
-
-        with pytest.raises(ApiError, match="Avatar not found"):
-            await client.connect()
-
-    @pytest.mark.asyncio
-    async def test_connect_livekit_error_disconnects(self, mock_api, mock_lk_manager):
-        mock_lk_cls, mock_lk = mock_lk_manager
-        mock_lk.connect.side_effect = RuntimeError("Connection refused")
-        client = PlatformRTCClient(api_key="key", avatar_id="avatar-123")
-        client._api = mock_api
-
-        with pytest.raises(RuntimeError, match="Connection refused"):
-            await client.connect()
-
-        mock_lk.disconnect.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_connect_livekit_ready_timeout(self, mock_api, mock_lk_manager):
-        mock_lk_cls, mock_lk = mock_lk_manager
-        mock_lk.wait_until_ready.side_effect = asyncio.TimeoutError()
-        client = PlatformRTCClient(api_key="key", avatar_id="avatar-123")
-        client._api = mock_api
-
-        with pytest.raises(asyncio.TimeoutError):
-            await client.connect()
-
-        mock_lk.disconnect.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_connect_dispatches_established_event(self, mock_api, mock_lk_manager):
-        mock_lk_cls, mock_lk = mock_lk_manager
-        client = PlatformRTCClient(api_key="key", avatar_id="avatar-123")
-        client._api = mock_api
-        received = []
-
-        @client.on("connection_established")
-        async def handler(session):
-            received.append(session)
-
-        session = await client.connect()
-        assert len(received) == 1
-        assert received[0] is session
-
-    @pytest.mark.asyncio
-    async def test_connect_async_alias(self, mock_api, mock_lk_manager):
-        mock_lk_cls, mock_lk = mock_lk_manager
-        client = PlatformRTCClient(api_key="key", avatar_id="avatar-123")
-        client._api = mock_api
-
-        session = await client.connect_async()
-        assert session is not None
-        assert session.session_id == "sess-abc"
-
-
-class TestDisconnect:
-    @pytest.mark.asyncio
-    async def test_disconnect_closes_session(self, mock_api, mock_lk_manager):
-        mock_lk_cls, mock_lk = mock_lk_manager
-        client = PlatformRTCClient(api_key="key", avatar_id="avatar-123")
-        client._api = mock_api
-
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [APIError(1, "no"), SessionStartError("bad")])
+async def test_start_failure_preserves_error_and_closes_http(client, api, error):
+    api.start_session.side_effect = error
+    with pytest.raises(type(error)) as raised:
         await client.connect()
-        await client.disconnect()
+    assert raised.value is error
+    api.aclose.assert_awaited_once()
 
-        mock_lk.disconnect.assert_called_once()
-        mock_api.stop_session.assert_called_once_with("sess-abc")
-        assert client._session is None
 
-    @pytest.mark.asyncio
-    async def test_disconnect_no_session_noop(self):
-        client = PlatformRTCClient(api_key="key", avatar_id="avatar-123")
-        await client.disconnect()  # Should not raise
+@pytest.mark.asyncio
+async def test_rtc_failure_is_wrapped_and_all_cleanup_runs(
+    client, api, manager, manager_factory
+):
+    primary = RuntimeError("publish failed")
+    manager.connect.side_effect = primary
+    manager.disconnect.side_effect = RuntimeError("disconnect failed")
+    api.stop_session.side_effect = RuntimeError("stop failed")
+    api.aclose.side_effect = RuntimeError("close failed")
 
-    @pytest.mark.asyncio
-    async def test_disconnect_dispatches_closed_event(self, mock_api, mock_lk_manager):
-        mock_lk_cls, mock_lk = mock_lk_manager
-        client = PlatformRTCClient(api_key="key", avatar_id="avatar-123")
-        client._api = mock_api
-        received = []
-
-        @client.on("connection_closed")
-        async def handler(session_id):
-            received.append(session_id)
-
+    with pytest.raises(RTCConnectionError) as raised:
         await client.connect()
+
+    assert raised.value.__cause__ is primary
+    manager.disconnect.assert_awaited_once()
+    api.stop_session.assert_awaited_once_with("sess-abc")
+    api.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_manager_construction_failure_preserves_error_and_cleans_up(client, api):
+    primary = RuntimeError("manager construction failed")
+    with patch("liveavatar_rtc.client.LiveKitManager", side_effect=primary):
+        with pytest.raises(RuntimeError) as raised:
+            await client.connect()
+    assert raised.value is primary
+    api.stop_session.assert_awaited_once_with("sess-abc")
+    api.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_session_construction_failure_preserves_error_and_cleans_up(
+    client, api, manager, manager_factory
+):
+    primary = ValueError("bad session")
+    with patch("liveavatar_rtc.client.Session", side_effect=primary):
+        with pytest.raises(ValueError) as raised:
+            await client.connect()
+    assert raised.value is primary
+    manager.disconnect.assert_awaited_once()
+    api.stop_session.assert_awaited_once_with("sess-abc")
+    api.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_disconnect_preserves_close_error_and_finishes_cleanup(
+    client, api, manager, manager_factory
+):
+    session = await client.connect()
+    primary = RuntimeError("rtc close failed")
+    session.close = AsyncMock(side_effect=primary)
+    api.stop_session.side_effect = RuntimeError("stop failed")
+    api.aclose.side_effect = RuntimeError("http close failed")
+
+    with pytest.raises(RuntimeError) as raised:
         await client.disconnect()
+    assert raised.value is primary
+    api.stop_session.assert_awaited_once_with("sess-abc")
+    api.aclose.assert_awaited_once()
+    assert client._session is None
 
-        assert received == ["sess-abc"]
+
+@pytest.mark.asyncio
+async def test_disconnect_is_idempotent(client, api, manager, manager_factory):
+    await client.connect()
+    await asyncio.gather(client.disconnect(), client.disconnect())
+    manager.disconnect.assert_awaited_once()
+    api.stop_session.assert_awaited_once_with("sess-abc")
+    api.aclose.assert_awaited_once()
 
 
-class TestContextManager:
-    @pytest.mark.asyncio
-    async def test_async_context_manager(self, mock_api, mock_lk_manager):
-        mock_lk_cls, mock_lk = mock_lk_manager
-        client = PlatformRTCClient(api_key="key", avatar_id="avatar-123")
-        client._api = mock_api
-
-        async with client as session:
-            assert session is not None
-            assert session.session_id == "sess-abc"
-            assert client._session is session
-
-        mock_lk.disconnect.assert_called_once()
-        mock_api.stop_session.assert_called_once_with("sess-abc")
-        assert client._session is None
-
-    @pytest.mark.asyncio
-    async def test_async_context_manager_exception_cleanup(self, mock_api, mock_lk_manager):
-        mock_lk_cls, mock_lk = mock_lk_manager
-        client = PlatformRTCClient(api_key="key", avatar_id="avatar-123")
-        client._api = mock_api
-
-        with pytest.raises(ValueError, match="test error"):
-            async with client as session:
-                raise ValueError("test error")
-
-        mock_lk.disconnect.assert_called_once()
-        assert client._session is None
+@pytest.mark.asyncio
+async def test_context_manager_preserves_body_error(client, api, manager_factory):
+    with pytest.raises(ValueError, match="body"):
+        async with client:
+            api.stop_session.side_effect = RuntimeError("cleanup")
+            raise ValueError("body")
+    api.aclose.assert_awaited_once()
