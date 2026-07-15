@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import numpy as np
@@ -201,6 +202,80 @@ async def test_publish_stream_rejects_second_active_stream(session, manager):
 
     release.set()
     await first
+
+
+@pytest.mark.asyncio
+async def test_completed_stream_cleanup_does_not_release_new_stream_ownership(
+    session, manager, monkeypatch
+):
+    real_create_task = asyncio.create_task
+    release_first_cleanup = asyncio.Event()
+    second_started = asyncio.Event()
+    release_second = asyncio.Event()
+    captures = 0
+    max_captures = 0
+
+    class DelayedCompletion:
+        def __init__(self, coroutine):
+            self.task = real_create_task(coroutine)
+
+        def done(self):
+            return self.task.done()
+
+        def __await__(self):
+            async def wait():
+                await self.task
+                await release_first_cleanup.wait()
+
+            return wait().__await__()
+
+    first_child = None
+
+    def create_task(coroutine):
+        nonlocal first_child
+        if first_child is None:
+            first_child = DelayedCompletion(coroutine)
+            return first_child
+        return real_create_task(coroutine)
+
+    import liveavatar_rtc.session as session_module
+
+    monkeypatch.setattr(
+        session_module,
+        "asyncio",
+        SimpleNamespace(create_task=create_task, CancelledError=asyncio.CancelledError),
+    )
+
+    async def capture(frame):
+        nonlocal captures, max_captures
+        captures += 1
+        max_captures = max(max_captures, captures)
+        try:
+            if int(frame.data[0]) == 2:
+                second_started.set()
+                await release_second.wait()
+        finally:
+            captures -= 1
+
+    async def frames(value):
+        yield AudioFrame.from_pcm(value.to_bytes(2, "little", signed=True), 24000)
+
+    manager.publish_audio_frame.side_effect = capture
+    first = real_create_task(session.publish_audio_stream(frames(1)))
+    while first_child is None or not first_child.done():
+        await asyncio.sleep(0)
+
+    second = real_create_task(session.publish_audio_stream(frames(2)))
+    await second_started.wait()
+    release_first_cleanup.set()
+    await first
+
+    with pytest.raises(AudioPublishError, match="already active"):
+        await session.publish_audio_stream(frames(3))
+
+    assert max_captures == 1
+    release_second.set()
+    await second
 
 
 @pytest.mark.asyncio

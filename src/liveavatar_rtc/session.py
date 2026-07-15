@@ -211,9 +211,10 @@ class Session:
                 self._ensure_open()
                 await self.publish_audio(frame)
 
-        self._output_task = asyncio.create_task(publish())
+        output_task = asyncio.create_task(publish())
+        self._output_task = output_task
         try:
-            await self._output_task
+            await output_task
         except asyncio.CancelledError:
             raise
         except (AudioFormatError, SessionClosedError):
@@ -223,7 +224,8 @@ class Session:
             await self._events.dispatch(ERROR, error)
             raise error from exc
         finally:
-            self._output_task = None
+            if self._output_task is output_task:
+                self._output_task = None
 
     async def send_custom_event(
         self,
