@@ -160,8 +160,12 @@ Optional variables include `LIVEAVATAR_BASE_URL`, `HTTP_PORT`,
 `DASHSCOPE_TTS_VOICE`, `DASHSCOPE_TTS_URL`, `DEEPSEEK_BASE_URL`,
 `DEEPSEEK_MODEL`, and `SYSTEM_PROMPT`.
 
-The RTC client explicitly requests 16 kHz input and 24 kHz output. The actual
-avatar output rate remains subject to the platform session negotiation.
+The RTC client explicitly requests 16 kHz input and 24 kHz output. This demo
+requires the avatar to be created with a 24 kHz output sample rate because its
+Qwen realtime TTS stream is fixed to 24 kHz PCM. If platform negotiation
+selects another output rate, audio publication fails with a message directing
+the developer to align the avatar configuration; the demo does not add its own
+resampler.
 
 ## Testing and Acceptance
 
