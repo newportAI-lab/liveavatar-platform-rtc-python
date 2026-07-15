@@ -44,7 +44,9 @@ async with client as session:
 ```
 
 See [`examples/basic_agent.py`](examples/basic_agent.py) for a syntactically
-runnable, provider-free pipeline skeleton.
+runnable, provider-free pipeline skeleton. It connects and consumes user audio,
+but intentionally produces no avatar speech until real developer ASR, LLM, and
+TTS are integrated; it prints this warning at startup.
 
 ## Connection and readiness stages
 

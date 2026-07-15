@@ -1,7 +1,7 @@
 """Minimal Platform RTC agent with a developer-owned ASR/LLM/TTS pipeline.
 
-This example has no external AI dependency. ``developer_pipeline`` is a no-op
-placeholder; replace its body with your streaming ASR, LLM, and TTS providers.
+This provider-free skeleton connects and consumes user audio, but intentionally
+produces no avatar speech until you integrate real developer ASR/LLM/TTS.
 """
 
 import asyncio
@@ -24,6 +24,10 @@ async def developer_pipeline(
 
 
 async def main() -> None:
+    print(
+        "WARNING: provider-free demo consumes user audio but produces no avatar "
+        "speech; integrate developer ASR/LLM/TTS to enable responses."
+    )
     client = PlatformRTCClient(
         api_key=os.environ["LIVEAVATAR_API_KEY"],
         avatar_id=os.environ["LIVEAVATAR_AVATAR_ID"],

@@ -40,7 +40,7 @@ def session(manager):
     return Session(manager)
 
 
-def test_rtc_public_surface_excludes_platform_tts_and_text():
+def test_rtc_public_surface_excludes_platform_tts_and_text(manager):
     import liveavatar_rtc
 
     expected_exports = {
@@ -68,6 +68,7 @@ def test_rtc_public_surface_excludes_platform_tts_and_text():
         "send_response_audio_prompt_finish",
     }
     assert removed_methods.isdisjoint(set(dir(liveavatar_rtc.Session)))
+    assert "connection" not in vars(liveavatar_rtc.Session(manager)).keys()
 
 
 def test_initial_state_and_connection_metadata(session):

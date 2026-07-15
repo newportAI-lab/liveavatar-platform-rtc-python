@@ -44,7 +44,8 @@ async with client as session:
 ```
 
 [`examples/basic_agent.py`](examples/basic_agent.py) 提供了语法可运行、无需外部
-AI 服务的管线骨架。
+AI 服务的管线骨架。它会连接房间并消费用户音频，但在接入真实的开发者 ASR、
+LLM 和 TTS 前会刻意不生成数字人语音；程序启动时也会打印此警告。
 
 ## 连接与就绪阶段
 

@@ -48,7 +48,6 @@ class Session:
             user_token=lk_manager.user_token,
             sfu_url=lk_manager.sfu_url,
         )
-        self.connection = self.frontend_connection
         self._events = EventDispatcher()
 
         self._agent_connected = True

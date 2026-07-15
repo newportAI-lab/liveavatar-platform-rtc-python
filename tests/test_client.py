@@ -86,8 +86,9 @@ async def test_server_output_rate_overrides_default(client, api, manager_factory
 @pytest.mark.asyncio
 async def test_session_exposes_frontend_safe_connection(client, manager_factory):
     session = await client.connect()
-    assert session.connection == FrontendConnection("user-token", "wss://sfu")
-    assert not hasattr(session.connection, "agent_token")
+    assert session.frontend_connection == FrontendConnection("user-token", "wss://sfu")
+    assert not hasattr(session.frontend_connection, "agent_token")
+    assert not hasattr(session, "connection")
 
 
 @pytest.mark.asyncio
