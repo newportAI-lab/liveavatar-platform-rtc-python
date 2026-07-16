@@ -16,6 +16,7 @@
 - Do not change ASR behavior for voice turns.
 - Text input is handled by the agent and converted to TTS audio.
 - The RTC platform still receives audio output only.
+- Do not emit `response.chunk` subtitle events to the digital human platform.
 
 ---
 
@@ -58,6 +59,7 @@ async def test_text_input_skips_asr_events_and_publishes_tts_audio(
     session.send_voice_finish.assert_not_awaited()
     session.send_asr_partial.assert_not_awaited()
     session.send_asr_final.assert_not_awaited()
+    session.send_subtitle.assert_not_awaited()
     session.publish_audio_stream.assert_awaited_once()
     tts.start.assert_awaited_once()
     tts.finish.assert_awaited_once()
@@ -101,10 +103,12 @@ Expected: all `test_agent.py` tests pass.
 
 - [ ] **Step 1: Add documentation without changing UI copy**
 
-Update `QUICKSTART.md` to state that users may type or speak, but the digital human platform still receives only agent-published audio. Use this exact sentence in the usage section:
+Update `QUICKSTART.md` to state that users may type or speak, but the digital human platform still receives only agent-published audio. Use these exact sentences in the usage section:
 
 ```markdown
 The demo supports both microphone input and typed text input. Typed text is sent to the agent as a user turn, then the agent replies through LLM -> TTS -> RTC audio publication, so the digital human platform still receives audio output only.
+
+The agent does not send `response.chunk` subtitle events to the digital human platform. LLM deltas are consumed only by the developer-side TTS path, and the platform receives the resulting RTC audio stream.
 ```
 
 - [ ] **Step 2: Check the documentation diff**
@@ -113,7 +117,7 @@ Run:
 
 ```bash
 cd /Users/luffer/workspace/liveavatar-ws-integration-demo/python-agent/rtc-chat
-rg -n "typed text|microphone input|audio output only" QUICKSTART.md
+rg -n "typed text|microphone input|audio output only|response\\.chunk" QUICKSTART.md
 ```
 
 Expected: the new documentation sentence appears once.
