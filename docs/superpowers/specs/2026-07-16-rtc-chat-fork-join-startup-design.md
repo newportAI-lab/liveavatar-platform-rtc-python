@@ -21,8 +21,8 @@ The user confirmed two requirements:
 ## Goals
 
 - Reduce time from RTC session creation to chat readiness by connecting independent dependencies concurrently.
-- Keep current RTC readiness ordering for user, audio, and scene events.
-- Keep `_ready = True` gated until RTC readiness, ASR readiness, and TTS readiness have all completed.
+- Keep current RTC-side scene gate ordering for user, audio, and scene events.
+- Keep `_ready = True` gated until the scene gate, ASR connection, and TTS connection have all completed.
 - Preserve current cleanup behavior: if one startup branch fails, cancel/close the other initialized resources.
 - Keep audio and text inputs gated until all branches have joined.
 - Do not introduce BYO RTC, multi-user, multi-track, or multi-avatar behavior.
@@ -37,11 +37,11 @@ The user confirmed two requirements:
 
 ## Proposed Architecture
 
-`ChatPipeline.start()` registers all RTC event handlers first, then forks three startup branches:
+`ChatPipeline.start()` registers all RTC event handlers first, then forks three startup branches. `scene.ready` is a video-scene signal: it means the avatar rendering scene is ready to present output, not that ASR or TTS resources are ready.
 
-- `rtc_ready`: wait for user join, user audio subscription, and `scene.ready` in the existing order.
-- `asr_ready`: connect and configure the DashScope ASR WebSocket.
-- `tts_ready`: connect and configure a DashScope TTS WebSocket for reuse by future response generations.
+- `scene_gate`: wait for user join, user audio subscription, and `scene.ready` in the existing order.
+- `asr_connection`: connect and configure the DashScope ASR WebSocket.
+- `tts_connection`: connect and configure a DashScope TTS WebSocket for reuse by future response generations.
 
 The pipeline joins these branches with `asyncio.gather()`. It sets `_ready = True` only after all three have completed. If any branch fails, the pipeline cancels unfinished startup tasks, records the readiness error, sets `_ready_event`, and lets Runtime perform the existing failed-readiness cleanup.
 
@@ -65,7 +65,7 @@ Runtime.start()
   -> create asr/llm/tts/pipeline
   -> pipeline.start()
        -> register RTC handlers
-       -> fork rtc_ready, asr_ready, tts_ready
+       -> fork scene_gate, asr_connection, tts_connection
        -> join all
        -> ready = true
 ```
@@ -76,15 +76,15 @@ During forked startup, incoming audio and text remain gated by `_ready`, so no a
 
 - If `asr_ready` fails, cancel the RTC and TTS startup branches and let Runtime cleanup close the session.
 - If `tts_ready` fails, cancel the RTC and ASR startup branches and let Runtime cleanup close the session.
-- If `rtc_ready` fails or times out, cancel ASR/TTS startup branches and let Runtime cleanup close the session.
+- If `scene_gate` fails or times out, cancel ASR/TTS startup branches and let Runtime cleanup close the session.
 - `close()` remains idempotent and must clean up partially connected providers.
 
 ## Testing
 
 Add focused tests in the rtc-chat demo:
 
-- `ChatPipeline.start()` starts ASR and TTS readiness concurrently with RTC readiness.
-- `_ready` is not set until RTC, ASR, and TTS readiness have all completed.
+- `ChatPipeline.start()` starts ASR and TTS connection concurrently with the scene gate.
+- `_ready` is not set until the scene gate, ASR connection, and TTS connection have all completed.
 - Audio frames are not forwarded before the join completes.
 - A startup failure in one branch cancels pending branches and is surfaced to Runtime cleanup.
 - `QwenTts.connect()` connects/configures once during startup.
@@ -93,7 +93,7 @@ Add focused tests in the rtc-chat demo:
 
 ## Acceptance Criteria
 
-- Startup logs show separate RTC, ASR, and TTS readiness durations.
-- A slow ASR or TTS connection can overlap with user/scene readiness.
+- Startup logs show separate scene gate, ASR connection, and TTS connection durations.
+- A slow ASR or TTS connection can overlap with user/audio/scene gate waiting.
 - Existing chat behavior, interruption behavior, and TTS cancellation tests continue to pass.
 - The full rtc-chat test suite passes.

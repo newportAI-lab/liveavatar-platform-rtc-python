@@ -37,7 +37,7 @@ Text:  input.text event -> on_text_input() -> LLM -> TTS -> RTC audio
 
 For text input, the agent skips ASR protocol events. It may still send subtitles and TTS audio for the response exactly like a voice turn. The digital human platform receives only published TTS audio.
 
-`on_text_input()` remains behind `_ready_event`, so text submitted before readiness waits until RTC, ASR, and TTS startup have joined. If readiness fails, the text turn is ignored because `_ready` stays false or the pipeline is closed.
+`on_text_input()` remains behind `_ready_event`, so text submitted before readiness waits until the scene gate, ASR connection, and TTS connection have joined. `scene.ready` means the avatar video scene is ready to present output; it is not an ASR or TTS resource dependency. If readiness fails, the text turn is ignored because `_ready` stays false or the pipeline is closed.
 
 ## Testing
 

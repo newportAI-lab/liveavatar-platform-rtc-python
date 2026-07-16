@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Reduce rtc-chat startup latency by connecting ASR and long-lived TTS concurrently with RTC readiness.
+**Goal:** Reduce rtc-chat startup latency by connecting ASR and long-lived TTS concurrently with the avatar scene gate.
 
-**Architecture:** `ChatPipeline.start()` registers handlers, forks `rtc_ready`, `asr_ready`, and `tts_ready`, then joins all three before setting `_ready = True`. `QwenTts` gains a startup-time `connect()` method that creates and configures a reusable provider; per-turn `start()` becomes a generation boundary that reuses the connected provider.
+**Architecture:** `ChatPipeline.start()` registers handlers, forks `scene_gate`, `asr_connection`, and `tts_connection`, then joins all three before setting `_ready = True`. `scene.ready` means the avatar video scene is ready to present output; it is not an ASR or TTS resource dependency. `QwenTts` gains a startup-time `connect()` method that creates and configures a reusable provider; per-turn `start()` becomes a generation boundary that reuses the connected provider.
 
 **Tech Stack:** Python 3.14, asyncio, aiohttp, DashScope Qwen ASR/TTS realtime SDKs, pytest.
 
@@ -15,7 +15,7 @@
 - Do not add LLM warmup in this iteration.
 - Do not retry ASR or TTS in this design.
 - Do not introduce BYO RTC, multi-user, multi-track, or multi-avatar behavior.
-- Keep `_ready = True` gated until RTC readiness, ASR readiness, and TTS readiness have all completed.
+- Keep `_ready = True` gated until the scene gate, ASR connection, and TTS connection have all completed.
 - Preserve current cleanup behavior: if one startup branch fails, cancel/close the other initialized resources.
 
 ---
@@ -301,7 +301,7 @@ In `/Users/luffer/workspace/liveavatar-ws-integration-demo/python-agent/rtc-chat
         logger.info("User audio subscribed")
         await self.session.wait_for_scene_ready()
         logger.info("Scene ready")
-        logger.info("RTC readiness completed in %.0f ms", (time.perf_counter() - started) * 1000)
+        logger.info("Scene gate completed in %.0f ms", (time.perf_counter() - started) * 1000)
 
     async def _connect_asr(self):
         started = time.perf_counter()
@@ -385,4 +385,4 @@ Report:
 - files changed;
 - exact test command and pass count;
 - that LLM warmup was intentionally not added;
-- that ASR/TTS now overlap RTC readiness and TTS is connected during startup.
+- that ASR/TTS now overlap the scene gate and TTS is connected during startup.
