@@ -32,6 +32,7 @@ The user confirmed two requirements:
 - Do not change platform protocol semantics.
 - Do not change ASR, LLM, or TTS vendors.
 - Do not pre-create LLM responses.
+- Do not add LLM warmup in this iteration.
 - Do not retry ASR or TTS in this design. Retry can be added separately after the parallel startup behavior is stable.
 
 ## Proposed Architecture
