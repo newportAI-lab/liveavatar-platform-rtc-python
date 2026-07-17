@@ -194,3 +194,5 @@ cython_debug/
 
 # Accidental nested project copy (tracked by mistake)
 /liveavatar-platform-rtc-python/
+ragflow/
+.codegraph/daemon.pid
