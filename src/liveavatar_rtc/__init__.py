@@ -1,3 +1,5 @@
+from importlib.metadata import PackageNotFoundError, version
+
 from .errors import (
     APIError,
     AudioFormatError,
@@ -33,7 +35,13 @@ from .types import (
     SessionInfo,
 )
 
+try:
+    __version__ = version("liveavatar-platform-rtc")
+except PackageNotFoundError:
+    __version__ = "0.0.0"
+
 __all__ = [
+    "__version__",
     "RTCSDKError",
     "APIError",
     "SessionStartError",

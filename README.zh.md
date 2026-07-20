@@ -7,6 +7,9 @@
 帧进入后端，开发者生成的 TTS PCM 音频驱动数字人说话。本包不提供平台 TTS
 或文本输入兼容 API。
 
+**版本 1.0.0** —— 面向开发者自有 ASR/LLM/TTS 管线的破坏性 Platform RTC
+Agent API。
+
 ## 安装
 
 ```bash
@@ -14,6 +17,12 @@ pip install liveavatar-platform-rtc
 ```
 
 需要 Python 3.10 或更高版本。
+
+## 开发安装
+
+```bash
+pip install -e ".[dev]"
+```
 
 ## 最小示例
 
@@ -46,6 +55,8 @@ async with client as session:
 [`examples/basic_agent.py`](examples/basic_agent.py) 提供了语法可运行、无需外部
 AI 服务的管线骨架。它会连接房间并消费用户音频，但在接入真实的开发者 ASR、
 LLM 和 TTS 前会刻意不生成数字人语音；程序启动时也会打印此警告。
+
+完整 Platform RTC 协议模型见 [`PROTOCOL.zh.md`](PROTOCOL.zh.md)。
 
 ## 连接与就绪阶段
 
@@ -94,16 +105,19 @@ await session.publish_audio_stream(tts_frames())
 `CUSTOM_EVENT`。未知 Data Channel 事件会作为 `CUSTOM_EVENT` 转发，并保留
 原始元数据。
 
-开发者 ASR/VAD 与字幕管线可调用：
+开发者 ASR/VAD 与应用自定义观测管线可调用：
 
 ```python
 await session.send_voice_start(request_id)
 await session.send_asr_partial(request_id, text, seq)
 await session.send_voice_finish(request_id)
 await session.send_asr_final(request_id, text)
-await session.send_subtitle(request_id, response_id, text, seq, timestamp)
 await session.send_custom_event("vendor.event", {"value": 1})
 ```
+
+RTC SDK 不提供 `response.chunk` / `response.done` helper。数字人语音由开发者
+发布到 LiveKit 的音频 Track 驱动，不由平台文本 TTS 驱动。如应用需要字幕或
+诊断信息，请发送你自己的前后端明确理解的自定义事件。
 
 使用 `await session.close()` 或退出客户端上下文关闭连接；上下文管理器还会停止
 远端平台会话。

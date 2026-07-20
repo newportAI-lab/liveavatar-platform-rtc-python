@@ -7,6 +7,9 @@ ASR, LLM, and TTS. The SDK connects that pipeline to the platform LiveKit room:
 user audio arrives as PCM frames, and your TTS PCM frames drive avatar speech.
 There is no platform-TTS or text-input compatibility API in this package.
 
+**Version 1.0.0** — breaking Platform RTC Agent API for developer-owned
+ASR/LLM/TTS pipelines.
+
 ## Install
 
 ```bash
@@ -14,6 +17,12 @@ pip install liveavatar-platform-rtc
 ```
 
 Python 3.10 or newer is required.
+
+## Development install
+
+```bash
+pip install -e ".[dev]"
+```
 
 ## Minimal agent
 
@@ -47,6 +56,8 @@ See [`examples/basic_agent.py`](examples/basic_agent.py) for a syntactically
 runnable, provider-free pipeline skeleton. It connects and consumes user audio,
 but intentionally produces no avatar speech until real developer ASR, LLM, and
 TTS are integrated; it prints this warning at startup.
+
+For the full Platform RTC protocol model, see [`PROTOCOL.md`](PROTOCOL.md).
 
 ## Connection and readiness stages
 
@@ -101,16 +112,20 @@ required topic. The SDK dispatches by the JSON `event` field and does not filter
 incoming packets by topic. `DataChannelEvent.topic` is retained only for
 diagnostics when a participant supplies one.
 
-Developer ASR/VAD and caption integrations can use:
+Developer ASR/VAD and application-specific observability integrations can use:
 
 ```python
 await session.send_voice_start(request_id)
 await session.send_asr_partial(request_id, text, seq)
 await session.send_voice_finish(request_id)
 await session.send_asr_final(request_id, text)
-await session.send_subtitle(request_id, response_id, text, seq, timestamp)
 await session.send_custom_event("vendor.event", {"value": 1})
 ```
+
+The RTC SDK does not provide `response.chunk` / `response.done` helpers. Avatar
+speech is driven by the developer-published LiveKit audio track, not by platform
+text TTS. If your application needs subtitles or diagnostics, send an explicit
+custom event that your own frontend or backend understands.
 
 Close with `await session.close()` or leave the client context manager. The
 context manager also stops the remote platform session.

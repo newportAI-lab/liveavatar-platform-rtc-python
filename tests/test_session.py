@@ -64,6 +64,7 @@ def test_rtc_public_surface_excludes_platform_tts_and_text(manager):
         "send_response_chunk",
         "send_response_done",
         "send_prompt",
+        "send_subtitle",
         "send_response_audio_prompt_start",
         "send_response_audio_prompt_finish",
     }
@@ -376,7 +377,6 @@ async def test_observability_helpers_preserve_correlation_fields(session, manage
     await session.send_asr_partial("req-1", "hel", 1)
     await session.send_voice_finish("req-1")
     await session.send_asr_final("req-1", "hello")
-    await session.send_subtitle("req-1", "resp-1", "caption", 2, 1234)
 
     assert [call.args[0] for call in manager.send_data_event.await_args_list] == [
         DataChannelEvent(event="input.voice.start", request_id="req-1"),
@@ -386,14 +386,6 @@ async def test_observability_helpers_preserve_correlation_fields(session, manage
         DataChannelEvent(event="input.voice.finish", request_id="req-1"),
         DataChannelEvent(
             event="input.asr.final", data={"text": "hello"}, request_id="req-1"
-        ),
-        DataChannelEvent(
-            event="response.chunk",
-            data={"text": "caption"},
-            request_id="req-1",
-            response_id="resp-1",
-            seq=2,
-            timestamp=1234,
         ),
     ]
 
@@ -424,7 +416,6 @@ async def test_send_custom_event_preserves_envelope(session, manager):
         ("send_asr_partial", ("req", "text", 1)),
         ("send_voice_finish", ("req",)),
         ("send_asr_final", ("req", "text")),
-        ("send_subtitle", ("req", "resp", "text", 1, 2)),
     ],
 )
 async def test_send_helpers_reject_closing_session_with_typed_error(

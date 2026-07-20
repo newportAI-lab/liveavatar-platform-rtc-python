@@ -6,14 +6,55 @@ build-backend = "hatchling.build"
 name = "liveavatar-platform-rtc"
 version = "1.0.0"
 description = "Live Avatar Platform RTC Python SDK — agent SDK for LiveKit-based real-time digital human"
-readme = "README.md"
-license = {text = "MIT"}
+readme = {file = "README.md", content-type = "text/markdown"}
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+    {name = "Live Avatar Team"}
+]
 requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+keywords = ["live-avatar", "digital-human", "rtc", "livekit", "tts", "asr", "avatar"]
 dependencies = [
     "livekit>=1.0",
     "httpx>=0.25",
     "numpy>=1.24",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "build",
+    "twine",
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+    "black",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/liveavatar_rtc"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]

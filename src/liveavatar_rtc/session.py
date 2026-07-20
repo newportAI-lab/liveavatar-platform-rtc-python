@@ -288,23 +288,6 @@ class Session:
             "input.asr.final", {"text": text}, request_id=request_id
         )
 
-    async def send_subtitle(
-        self,
-        request_id: str,
-        response_id: str,
-        text: str,
-        seq: int,
-        timestamp: int,
-    ) -> None:
-        await self.send_custom_event(
-            "response.chunk",
-            {"text": text},
-            request_id=request_id,
-            response_id=response_id,
-            seq=seq,
-            timestamp=timestamp,
-        )
-
     async def close(self) -> None:
         task = self._close_task
         if task is not None:

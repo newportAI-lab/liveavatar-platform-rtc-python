@@ -1,0 +1,4 @@
+include README.md README.zh.md
+include LICENSE
+include PROTOCOL.md PROTOCOL.zh.md
+recursive-include examples *.py
