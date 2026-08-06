@@ -7,7 +7,7 @@
 帧进入后端，开发者生成的 TTS PCM 音频驱动数字人说话。本包不提供平台 TTS
 或文本输入兼容 API。
 
-**版本 1.0.0** —— 面向开发者自有 ASR/LLM/TTS 管线的破坏性 Platform RTC
+**版本 1.0.1** —— 面向开发者自有 ASR/LLM/TTS 管线的破坏性 Platform RTC
 Agent API。
 
 ## 安装
@@ -101,9 +101,29 @@ await session.publish_audio_stream(tts_frames())
 
 使用 `@session.on(event_name)` 注册处理器。常用事件包括
 `USER_AUDIO_FRAME`、`USER_JOINED`、`USER_LEFT`、`SCENE_READY`、
-`SESSION_STATE`、`SESSION_CLOSING`、`DISCONNECTED`、`ERROR` 和
+`SCENE_RESOURCE_TRANSITION`、`SESSION_STATE`、`SESSION_CLOSING`、`DISCONNECTED`、`ERROR` 和
 `CUSTOM_EVENT`。未知 Data Channel 事件会作为 `CUSTOM_EVENT` 转发，并保留
 原始元数据。
+
+平台会在 renderer 播放完当前视频、即将切换到下一个已配置视频资源时发送
+`SCENE_RESOURCE_TRANSITION`。这是单向通知；handler 返回值不会确认、取消或延迟
+renderer 的视频切换。
+
+```python
+from liveavatar_rtc import DataChannelEvent, SCENE_RESOURCE_TRANSITION
+
+@session.on(SCENE_RESOURCE_TRANSITION)
+async def on_resource_transition(event: DataChannelEvent) -> None:
+    previous_id = event.data["previousResourceId"]
+    next_id = event.data["nextResourceId"]
+    message = event.data.get("message")
+```
+
+`previousResourceId` 和 `nextResourceId` 是必填的稳定业务资源 ID，不是 URL、
+文件路径或展示名称。`message` 是可选的可读说明文本，仅适合日志或排查，不要用它做
+业务分支判断。`session_id`、`request_id`、`timestamp`、participant identity
+和 topic 都是 `DataChannelEvent` 上的 envelope 元数据，不在 `data` 内。事件没有
+`streamId` 字段，因为当前 RTC session 已经限定了 stream 范围。
 
 开发者 ASR/VAD 与应用自定义观测管线可调用：
 

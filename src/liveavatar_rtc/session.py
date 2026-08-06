@@ -14,6 +14,7 @@ from .livekit_manager import LiveKitManager
 from .types import AudioFrame, DataChannelEvent, FrontendConnection
 
 SCENE_READY = "scene.ready"
+SCENE_RESOURCE_TRANSITION = "scene.resourceTransition"
 SESSION_STATE = "session.state"
 SESSION_CLOSING = "session.closing"
 IDLE_TRIGGER = "system.idleTrigger"
@@ -29,6 +30,7 @@ DISCONNECTED = "disconnected"
 
 _KNOWN_DATA_EVENTS = {
     SCENE_READY,
+    SCENE_RESOURCE_TRANSITION,
     SESSION_STATE,
     SESSION_CLOSING,
     IDLE_TRIGGER,

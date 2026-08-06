@@ -99,11 +99,44 @@ SDK 根据 JSON 的 `event` 字段分发事件，不给 LiveKit Data Channel top
 | Event | SDK 事件 | 含义 |
 | --- | --- | --- |
 | `scene.ready` | `SCENE_READY` | 前端数字人视频画面已 ready |
+| `scene.resourceTransition` | `SCENE_RESOURCE_TRANSITION` | renderer 即将切换视频资源 |
 | `session.state` | `SESSION_STATE` | 平台会话状态更新 |
 | `session.closing` | `SESSION_CLOSING` | 平台即将关闭会话 |
 | `system.idleTrigger` | `IDLE_TRIGGER` | 平台侧 idle 通知 |
 | `error` | `ERROR` | 协议或平台错误 |
 | 未知但合法的 envelope | `CUSTOM_EVENT` | 应用自定义或未来协议事件 |
+
+### `scene.resourceTransition`
+
+平台会在 renderer 播放完当前视频、即将切换到下一个已配置视频资源时发送该事件。
+SDK 会通过 `session.on(SCENE_RESOURCE_TRANSITION)` 将它作为 `DataChannelEvent`
+分发给业务处理器。
+
+```json
+{
+  "event": "scene.resourceTransition",
+  "requestId": "renderer_req_1",
+  "timestamp": 1710000000000,
+  "data": {
+    "previousResourceId": "video_a",
+    "nextResourceId": "video_b",
+    "message": "switch from video_a to video_b"
+  }
+}
+```
+
+| 字段 | 位置 | 是否必填 | 含义 |
+| --- | --- | --- | --- |
+| `previousResourceId` | `data` | 是 | 即将切走的上一个视频资源的稳定业务 ID。它不是 URL、文件路径或展示名称。 |
+| `nextResourceId` | `data` | 是 | 即将切到的下一个视频资源的稳定业务 ID。它不是 URL、文件路径或展示名称。 |
+| `message` | `data` | 否 | 可选的可读说明文本，仅适合日志或排查，不要用它做业务分支判断。 |
+| `requestId` | envelope | 否 | 平台生成的请求/关联 ID，用于链路追踪该通知。 |
+| `timestamp` | envelope | 否 | 平台事件时间，单位为 epoch milliseconds。 |
+
+该事件是单向通知。后端无需回复，handler 也不能确认、取消或延迟 renderer 的视频
+切换。事件没有 `streamId` 字段，因为当前 RTC session 已经限定了 stream 范围。
+如果任一资源 ID 缺失或为空白字符串，或者 `message` 存在但不是字符串，SDK 会派发
+`protocol_error`，不会触发业务事件处理器。
 
 常见出站 helper：
 

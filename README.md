@@ -7,7 +7,7 @@ ASR, LLM, and TTS. The SDK connects that pipeline to the platform LiveKit room:
 user audio arrives as PCM frames, and your TTS PCM frames drive avatar speech.
 There is no platform-TTS or text-input compatibility API in this package.
 
-**Version 1.0.0** — breaking Platform RTC Agent API for developer-owned
+**Version 1.0.1** — breaking Platform RTC Agent API for developer-owned
 ASR/LLM/TTS pipelines.
 
 ## Install
@@ -103,7 +103,7 @@ local `interrupted` hook. Use that hook to cancel your LLM/TTS provider too.
 
 Register handlers with `@session.on(event_name)`. Common SDK events are
 `USER_AUDIO_FRAME`, `USER_JOINED`, `USER_LEFT`, `SCENE_READY`,
-`SESSION_STATE`, `SESSION_CLOSING`, `DISCONNECTED`, `ERROR`, and
+`SCENE_RESOURCE_TRANSITION`, `SESSION_STATE`, `SESSION_CLOSING`, `DISCONNECTED`, `ERROR`, and
 `CUSTOM_EVENT`. Unknown data-channel envelopes are delivered as
 `CUSTOM_EVENT` without discarding their metadata.
 
@@ -111,6 +111,28 @@ RTC Agent protocol packets are reliable LiveKit Data Channel messages without a
 required topic. The SDK dispatches by the JSON `event` field and does not filter
 incoming packets by topic. `DataChannelEvent.topic` is retained only for
 diagnostics when a participant supplies one.
+
+The platform sends `SCENE_RESOURCE_TRANSITION` when the renderer has finished
+the current video and is about to switch to the next configured video resource.
+This is a one-way notification; the handler return value does not acknowledge,
+cancel, or delay the renderer switch.
+
+```python
+from liveavatar_rtc import DataChannelEvent, SCENE_RESOURCE_TRANSITION
+
+@session.on(SCENE_RESOURCE_TRANSITION)
+async def on_resource_transition(event: DataChannelEvent) -> None:
+    previous_id = event.data["previousResourceId"]
+    next_id = event.data["nextResourceId"]
+    message = event.data.get("message")
+```
+
+`previousResourceId` and `nextResourceId` are required stable business resource
+IDs, not URLs, file paths, or display names. `message` is optional
+human-readable context for logs or diagnostics; do not branch business logic on
+it. `session_id`, `request_id`, `timestamp`, participant identity, and topic are
+envelope metadata on `DataChannelEvent`, not fields inside `data`. There is no
+`streamId` field because the active RTC session already scopes the stream.
 
 Developer ASR/VAD and application-specific observability integrations can use:
 
