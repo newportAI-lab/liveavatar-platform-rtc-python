@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 _KNOWN_DATA_EVENTS = {
     "scene.ready",
+    "scene.resourceTransition",
     "session.state",
     "session.closing",
     "system.idleTrigger",
@@ -426,6 +427,20 @@ class LiveKitManager:
             raise ValueError("data must be an object for known events")
         if event == "session.state" and not isinstance(data.get("state"), str):
             raise ValueError("session.state data.state must be a string")
+        if event == "scene.resourceTransition":
+            previous_resource_id = data.get("previousResourceId")
+            next_resource_id = data.get("nextResourceId")
+            message = data.get("message")
+            if not isinstance(previous_resource_id, str) or not previous_resource_id.strip():
+                raise ValueError(
+                    "scene.resourceTransition data.previousResourceId must be a non-empty string"
+                )
+            if not isinstance(next_resource_id, str) or not next_resource_id.strip():
+                raise ValueError(
+                    "scene.resourceTransition data.nextResourceId must be a non-empty string"
+                )
+            if message is not None and not isinstance(message, str):
+                raise ValueError("scene.resourceTransition data.message must be a string")
         if event == "error" and not isinstance(data.get("message"), str):
             raise ValueError("error data.message must be a string")
 

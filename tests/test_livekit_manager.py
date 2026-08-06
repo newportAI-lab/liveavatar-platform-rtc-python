@@ -529,6 +529,44 @@ class TestDataChannelEvents:
         assert event.topic == "custom-observer-topic"
 
     @pytest.mark.asyncio
+    async def test_resource_transition_packet_preserves_complete_envelope(self, lk):
+        received = []
+        _mgr(lk).events.add("data_channel_event", received.append)
+        packet = MagicMock(
+            topic="liveavatar",
+            participant=MagicMock(identity="coordinator_test-session"),
+            data=json.dumps(
+                {
+                    "event": "scene.resourceTransition",
+                    "requestId": "renderer-req-1",
+                    "timestamp": 1710000000000,
+                    "data": {
+                        "previousResourceId": "video-a",
+                        "nextResourceId": "video-b",
+                        "message": "switch from video-a to video-b",
+                    },
+                }
+            ).encode(),
+        )
+
+        await _mgr(lk)._on_data_received(packet)
+
+        assert received == [
+            DataChannelEvent(
+                event="scene.resourceTransition",
+                data={
+                    "previousResourceId": "video-a",
+                    "nextResourceId": "video-b",
+                    "message": "switch from video-a to video-b",
+                },
+                request_id="renderer-req-1",
+                timestamp=1710000000000,
+                participant_identity="coordinator_test-session",
+                topic="liveavatar",
+            )
+        ]
+
+    @pytest.mark.asyncio
     async def test_topicless_browser_system_event_is_dispatched(self, lk):
         handler = AsyncMock()
         _mgr(lk).events.add("data_channel_event", handler)
@@ -571,6 +609,26 @@ class TestDataChannelEvents:
             {"event": "scene.ready", "responseId": False},
             {"event": "scene.ready", "seq": "1"},
             {"event": "scene.ready", "timestamp": True},
+            {
+                "event": "scene.resourceTransition",
+                "data": {"nextResourceId": "video-b"},
+            },
+            {
+                "event": "scene.resourceTransition",
+                "data": {"previousResourceId": "   ", "nextResourceId": "video-b"},
+            },
+            {
+                "event": "scene.resourceTransition",
+                "data": {"previousResourceId": "video-a", "nextResourceId": ""},
+            },
+            {
+                "event": "scene.resourceTransition",
+                "data": {
+                    "previousResourceId": "video-a",
+                    "nextResourceId": "video-b",
+                    "message": 123,
+                },
+            },
         ],
     )
     async def test_malformed_known_event_envelopes_emit_protocol_error_without_data_event(

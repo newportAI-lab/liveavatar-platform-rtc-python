@@ -109,11 +109,45 @@ Common incoming events:
 | Event | SDK event | Meaning |
 | --- | --- | --- |
 | `scene.ready` | `SCENE_READY` | Avatar video scene is ready on the frontend |
+| `scene.resourceTransition` | `SCENE_RESOURCE_TRANSITION` | Renderer is about to switch video resources |
 | `session.state` | `SESSION_STATE` | Platform session state update |
 | `session.closing` | `SESSION_CLOSING` | Platform is about to close the session |
 | `system.idleTrigger` | `IDLE_TRIGGER` | Platform-side idle notification |
 | `error` | `ERROR` | Protocol or platform error |
 | unknown valid envelope | `CUSTOM_EVENT` | Application or future protocol event |
+
+### `scene.resourceTransition`
+
+The platform sends this event when the renderer has finished the current video
+and is about to switch to the next configured video resource. It is delivered as
+a `DataChannelEvent` through `session.on(SCENE_RESOURCE_TRANSITION)`.
+
+```json
+{
+  "event": "scene.resourceTransition",
+  "requestId": "renderer_req_1",
+  "timestamp": 1710000000000,
+  "data": {
+    "previousResourceId": "video_a",
+    "nextResourceId": "video_b",
+    "message": "switch from video_a to video_b"
+  }
+}
+```
+
+| Field | Location | Required | Meaning |
+| --- | --- | --- | --- |
+| `previousResourceId` | `data` | Yes | Stable business ID of the video resource being switched away from. It is not a URL, file path, or display name. |
+| `nextResourceId` | `data` | Yes | Stable business ID of the video resource the renderer is about to switch to. It is not a URL, file path, or display name. |
+| `message` | `data` | No | Optional human-readable context for logs or diagnostics. Do not branch business logic on it. |
+| `requestId` | envelope | No | Platform-generated request/correlation ID for tracing this notification. |
+| `timestamp` | envelope | No | Platform event time in epoch milliseconds when supplied. |
+
+The event is a one-way notification. The backend does not reply to it, and a
+handler cannot acknowledge, cancel, or delay the renderer switch. There is no
+`streamId` field because the active RTC session scopes the stream. If either
+resource ID is missing or blank, or `message` is present but not a string, the
+SDK dispatches `protocol_error` and does not dispatch the event handler.
 
 Common outgoing helpers:
 

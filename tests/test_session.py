@@ -13,6 +13,7 @@ from liveavatar_rtc.errors import (
 )
 from liveavatar_rtc.event_dispatcher import EventDispatcher
 from liveavatar_rtc.session import Session
+from liveavatar_rtc.session import SCENE_RESOURCE_TRANSITION
 from liveavatar_rtc.types import (
     AudioFrame,
     AudioTrackInfo,
@@ -52,6 +53,7 @@ def test_rtc_public_surface_excludes_platform_tts_and_text(manager):
         "DataChannelEvent",
         "USER_AUDIO_FRAME",
         "SCENE_READY",
+        "SCENE_RESOURCE_TRANSITION",
         "DISCONNECTED",
     }
     assert expected_exports.issubset(set(liveavatar_rtc.__all__))
@@ -136,6 +138,38 @@ async def test_unknown_data_event_is_forwarded_as_custom_event(session, manager)
     await manager.events.dispatch("data_channel_event", envelope)
 
     assert received == [envelope]
+
+
+@pytest.mark.asyncio
+async def test_resource_transition_is_forwarded_as_known_event(session, manager):
+    received = []
+    custom_received = []
+
+    @session.on(SCENE_RESOURCE_TRANSITION)
+    async def record(envelope):
+        received.append(envelope)
+
+    @session.on("custom_event")
+    async def record_custom(envelope):
+        custom_received.append(envelope)
+
+    envelope = DataChannelEvent(
+        event="scene.resourceTransition",
+        data={
+            "previousResourceId": "video-a",
+            "nextResourceId": "video-b",
+            "message": "switch from video-a to video-b",
+        },
+        request_id="renderer-req-1",
+        timestamp=1710000000000,
+        participant_identity="coordinator_sess-test-123",
+        topic="liveavatar",
+    )
+
+    await manager.events.dispatch("data_channel_event", envelope)
+
+    assert received == [envelope]
+    assert custom_received == []
 
 
 @pytest.mark.asyncio
