@@ -66,8 +66,8 @@ For the full Platform RTC protocol model, see [`PROTOCOL.md`](PROTOCOL.md).
 2. Send `session.frontend_connection` to the frontend. It contains only the
    user's `user_token` and `sfu_url`; never send the API key or agent token.
 3. `await session.wait_for_user()` waits for that frontend user to join.
-4. `await session.wait_for_scene_ready()` waits for the coordinator's
-   `scene.ready` event. Start avatar output after this stage.
+4. `await session.wait_for_scene_ready()` waits for the `scene.ready` event (sent by the platform through the
+   renderer). Start avatar output after this stage.
 
 The observable flags are `is_agent_connected`, `is_user_joined`,
 `is_user_audio_subscribed`, `is_scene_ready`, `is_closing`, and `is_closed`.

@@ -23,7 +23,6 @@ sequenceDiagram
 
     Backend->>Platform: /session/start { avatarId, mode: "rtcAgent" } with API Key
     Platform->>Avatar: Start avatar renderer
-    Platform->>Room: Coordinator joins as coordinator_{sessionId}
     Avatar->>Room: Renderer joins as renderer_{sessionId}
     Platform-->>Backend: sessionId, userToken, agentToken, sfuUrl
     Backend->>Room: Agent joins as agent_{sessionId} with agentToken

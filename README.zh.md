@@ -65,8 +65,8 @@ LLM 和 TTS 前会刻意不生成数字人语音；程序启动时也会打印�
 2. 将 `session.frontend_connection` 发给前端。其中只有用户的 `user_token` 和
    `sfu_url`；不得发送 API Key 或 Agent Token。
 3. `await session.wait_for_user()` 等待前端用户加入同一房间。
-4. `await session.wait_for_scene_ready()` 等待 coordinator 的 `scene.ready`
-   事件；此后再开始数字人音频输出。
+4. `await session.wait_for_scene_ready()` 等待 `scene.ready` 事件（由平台通过 renderer 发送）；
+   此后再开始数字人音频输出。
 
 可观察状态包括 `is_agent_connected`、`is_user_joined`、
 `is_user_audio_subscribed`、`is_scene_ready`、`is_closing` 和 `is_closed`。

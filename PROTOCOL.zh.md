@@ -21,7 +21,6 @@ sequenceDiagram
 
     Backend->>Platform: /session/start { avatarId, mode: "rtcAgent" } + API Key
     Platform->>Avatar: 启动数字人渲染端
-    Platform->>Room: coordinator_{sessionId} 加入房间
     Avatar->>Room: renderer_{sessionId} 加入房间
     Platform-->>Backend: sessionId, userToken, agentToken, sfuUrl
     Backend->>Room: agent_{sessionId} 使用 agentToken 加入房间
