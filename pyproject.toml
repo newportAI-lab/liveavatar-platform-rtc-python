@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "liveavatar-platform-rtc"
-version = "1.0.1"
+version = "1.0.2"
 description = "Live Avatar Platform RTC Python SDK — agent SDK for LiveKit-based real-time digital human"
 readme = {file = "README.md", content-type = "text/markdown"}
 license = "Apache-2.0"

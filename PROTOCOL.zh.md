@@ -145,7 +145,8 @@ SDK 会通过 `session.on(SCENE_RESOURCE_TRANSITION)` 将它作为 `DataChannelE
 | `send_asr_partial(request_id, text, seq)` | `input.asr.partial` | 开发者 ASR 中间结果 |
 | `send_voice_finish(request_id)` | `input.voice.finish` | 开发者 VAD 检测到语音结束 |
 | `send_asr_final(request_id, text)` | `input.asr.final` | 开发者 ASR 最终结果 |
-| `interrupt(request_id=None)` | `control.interrupt` | 取消当前数字人输出 |
+| `interrupt(request_id=None, interrupt_scope=None)` | `control.interrupt` | 不传、空字符串或 `VOICE_ONLY`：只停止人声。`BGM_ONLY`：只清还没播出的外部音频，本地人声继续推。`VOICE_AND_ACCOMPANIMENT`：停止人声并清还没播出的外部音频。底板视频自带声音不会被清掉。 |
+| `publish_external_audio(pcm)` | `external.audio.chunk` | 发送外部 PCM。不要用 `publish_audio` |
 | `send_custom_event(event, data, ...)` | 自定义 | 应用自有事件 envelope |
 
 RTC SDK 有意不提供 `response.chunk` / `response.done` helper。数字人语音通过
