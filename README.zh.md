@@ -7,8 +7,7 @@
 帧进入后端，开发者生成的 TTS PCM 音频驱动数字人说话。本包不提供平台 TTS
 或文本输入兼容 API。
 
-**版本 1.0.1** —— 面向开发者自有 ASR/LLM/TTS 管线的破坏性 Platform RTC
-Agent API。
+**版本 1.0.2**
 
 ## 安装
 
@@ -93,9 +92,31 @@ async def tts_frames():
 await session.publish_audio_stream(tts_frames())
 ```
 
-同一时间只能有一个输出流。`await session.interrupt(request_id)` 会取消该流、
-清空待播放音频、发送 `control.interrupt`，并触发本地 `interrupted` 钩子。
-应用应在该钩子中同时取消正在生成的 LLM/TTS 请求。
+外部音频不走 `publish_audio`。那条轨是人声，会驱动嘴唇。
+
+```python
+client = PlatformRTCClient(..., external_audio_config={"sampleRate": 48000, "channels": 2})
+session = await client.connect()
+await session.publish_external_audio(pcm)
+await session.interrupt(interrupt_scope="BGM_ONLY")
+await session.interrupt(interrupt_scope="VOICE_AND_ACCOMPANIMENT")
+```
+
+`PlatformRTCClient` 新增可选参数 `external_audio_config`。不传则跟随本次语音格式。非 0 的 `sampleRate` 只能是 16000、24000、44100 或 48000，`channels` 为 1 或 2。开播时以 `externalAudioConfig` 发送。
+
+`publish_external_audio(pcm)` 是新增方法。`pcm` 为 16 位小端 PCM，只播放，不驱动口型。不要用 `publish_audio` 发送这段音频。采样率和声道必须与 `external_audio_config` 一致；未设置该参数时，必须与本次会话的 TTS 音频格式一致。
+
+PCM 会经过 base64 放进数据通道消息，因此 PCM 本身不要超过 48000 字节，编码后的消息才能保持在 65536 字节以内。超过这个限制的帧会被关闭。后续每个包都要在已发送音频播放完之前送到。例如一包含 200 毫秒音频时，不要等满 200 毫秒再发下一包。第一包可以比后面的包更长，用来先准备一段可播放的音频，但仍然不能超过上面的大小限制。
+
+`interrupt` 新增字符串参数 `interrupt_scope`。
+
+| 取值 | 效果 |
+|---|---|
+| 不传、空字符串或 `VOICE_ONLY` | 停止语音播放，并取消本地语音流、清除待播放语音、触发 `interrupted` |
+| `BGM_ONLY` | 只清除尚未播放的外部音频。本地语音流继续 |
+| `VOICE_AND_ACCOMPANIMENT` | 停止语音播放并清除尚未播放的外部音频。本地语音流也会取消 |
+
+该参数的值写入事件 `control.interrupt` 的 `data.interruptScope`。底板视频中的音频不会被清除。
 
 ## 事件与协议钩子
 

@@ -156,7 +156,8 @@ Common outgoing helpers:
 | `send_asr_partial(request_id, text, seq)` | `input.asr.partial` | Developer ASR partial result |
 | `send_voice_finish(request_id)` | `input.voice.finish` | Developer VAD detected speech end |
 | `send_asr_final(request_id, text)` | `input.asr.final` | Developer ASR final result |
-| `interrupt(request_id=None)` | `control.interrupt` | Cancel current avatar output |
+| `interrupt(request_id=None, interrupt_scope=None)` | `control.interrupt` | Omit, blank, or `VOICE_ONLY`: stop voice only. `BGM_ONLY`: clear queued external audio only and keep the local voice stream. `VOICE_AND_ACCOMPANIMENT`: stop voice and clear queued external audio. Base-video audio is never cleared. |
+| `publish_external_audio(pcm)` | `external.audio.chunk` | Send external PCM. Do not use `publish_audio` |
 | `send_custom_event(event, data, ...)` | custom | Application-owned event envelope |
 
 There are intentionally no `response.chunk` / `response.done` helper methods in

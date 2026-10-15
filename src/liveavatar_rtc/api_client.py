@@ -30,11 +30,18 @@ class ApiClient:
             h["X-Env-Sandbox"] = "true"
         return h
 
-    async def start_session(self, avatar_id: str) -> SessionInfo:
+    async def start_session(
+        self,
+        avatar_id: str,
+        external_audio_config: dict | None = None,
+    ) -> SessionInfo:
+        body: dict = {"avatarId": avatar_id, "mode": "rtcAgent"}
+        if external_audio_config is not None:
+            body["externalAudioConfig"] = external_audio_config
         resp = await self._client.post(
             f"{self._base_url}/v1/session/start",
             headers=self._headers(),
-            json={"avatarId": avatar_id, "mode": "rtcAgent"},
+            json=body,
         )
         resp.raise_for_status()
         payload: dict = resp.json()

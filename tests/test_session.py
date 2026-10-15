@@ -498,6 +498,37 @@ async def test_interrupt_cancels_stream_sends_control_and_emits_local_event(
 
 
 @pytest.mark.asyncio
+async def test_bgm_only_leaves_the_voice_stream_running(session, manager):
+    interrupted = []
+    started = asyncio.Event()
+
+    async def blocking_frames():
+        started.set()
+        await asyncio.Event().wait()
+        yield AudioFrame.from_pcm(b"\x00\x00", 24000)
+
+    session.on("interrupted")(lambda request_id: interrupted.append(request_id))
+    stream_task = asyncio.create_task(session.publish_audio_stream(blocking_frames()))
+    await started.wait()
+
+    await session.interrupt("req-bgm", interrupt_scope=" BGM_ONLY ")
+
+    assert not stream_task.done()
+    manager.clear_output_queue.assert_not_awaited()
+    manager.send_data_event.assert_awaited_once_with(
+        DataChannelEvent(
+            event="control.interrupt",
+            request_id="req-bgm",
+            data={"interruptScope": "BGM_ONLY"},
+        )
+    )
+    assert interrupted == []
+    stream_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await stream_task
+
+
+@pytest.mark.asyncio
 async def test_interrupt_caller_cancellation_is_not_swallowed(session, manager):
     started = asyncio.Event()
     cleanup_started = asyncio.Event()

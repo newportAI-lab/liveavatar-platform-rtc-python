@@ -7,8 +7,7 @@ ASR, LLM, and TTS. The SDK connects that pipeline to the platform LiveKit room:
 user audio arrives as PCM frames, and your TTS PCM frames drive avatar speech.
 There is no platform-TTS or text-input compatibility API in this package.
 
-**Version 1.0.1** — breaking Platform RTC Agent API for developer-owned
-ASR/LLM/TTS pipelines.
+**Version 1.0.2**
 
 ## Install
 
@@ -95,9 +94,31 @@ async def tts_frames():
 await session.publish_audio_stream(tts_frames())
 ```
 
-Only one output stream may be active. `await session.interrupt(request_id)`
-cancels it, clears queued playout, sends `control.interrupt`, and emits the
-local `interrupted` hook. Use that hook to cancel your LLM/TTS provider too.
+External audio does not use `publish_audio`. That track is voice and drives lip sync.
+
+```python
+client = PlatformRTCClient(..., external_audio_config={"sampleRate": 48000, "channels": 2})
+session = await client.connect()
+await session.publish_external_audio(pcm)
+await session.interrupt(interrupt_scope="BGM_ONLY")
+await session.interrupt(interrupt_scope="VOICE_AND_ACCOMPANIMENT")
+```
+
+`PlatformRTCClient` adds the optional parameter `external_audio_config`. Omit it to follow the session voice format. A non-zero `sampleRate` must be 16000, 24000, 44100, or 48000. `channels` is 1 or 2. It is sent as `externalAudioConfig` on session start.
+
+`publish_external_audio(pcm)` is a new method. `pcm` is 16-bit little-endian PCM and is played without driving lip sync. Do not use `publish_audio` for this audio. Its sample rate and channel count must match `external_audio_config` when that parameter is set. When it is not set, they must match the TTS audio format used for this session.
+
+The PCM is base64-encoded inside a data-channel message, so keep the PCM itself at or below 48000 bytes. The encoded message then stays under the 65536-byte limit that closes an oversized frame. Send each later packet before the audio already queued has finished playing. For example, do not wait a full 200 ms before sending the next 200 ms packet. Make the first packet longer than the later packets, while still staying under the size limit, so playback has audio waiting when it starts.
+
+`interrupt` adds the string parameter `interrupt_scope`.
+
+| Value | Effect |
+|---|---|
+| omitted, empty, or `VOICE_ONLY` | Stop voice playback, cancel the local voice stream, clear queued voice audio, and emit `interrupted` |
+| `BGM_ONLY` | Clear queued external audio only. The local voice stream keeps running |
+| `VOICE_AND_ACCOMPANIMENT` | Stop voice playback and clear queued external audio. The local voice stream is also cancelled |
+
+The value is sent as `data.interruptScope` on `control.interrupt`. Audio that belongs to the base video is not cleared.
 
 ## Events and protocol hooks
 

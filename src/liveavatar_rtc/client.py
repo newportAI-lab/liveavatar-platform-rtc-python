@@ -29,6 +29,7 @@ class PlatformRTCClient:
         input_sample_rate: int = 16000,
         output_sample_rate: int = 24000,
         sandbox: bool = False,
+        external_audio_config: dict | None = None,
     ) -> None:
         if base_url is None:
             base_url = os.environ.get("LIVEAVATAR_BASE_URL", _DEFAULT_BASE_URL)
@@ -37,6 +38,7 @@ class PlatformRTCClient:
         self._sandbox = sandbox
         self._api = self._new_api()
         self._avatar_id = avatar_id
+        self._external_audio_config = external_audio_config
         self._input_sample_rate = input_sample_rate
         self._output_sample_rate = output_sample_rate
         self._session: Session | None = None
@@ -102,7 +104,9 @@ class PlatformRTCClient:
         await self._prepare_connect_cycle()
 
         try:
-            info = await self._api.start_session(self._avatar_id)
+            info = await self._api.start_session(
+                self._avatar_id, self._external_audio_config
+            )
         except BaseException:
             await self._try_cleanup(self._close_api, "HTTP client close")
             raise

@@ -256,23 +256,67 @@ class Session:
             )
         )
 
-    async def interrupt(self, request_id: str | None = None) -> None:
+    async def publish_external_audio(self, pcm: bytes, *, timestamp_us: int = 0) -> None:
+        import base64
+
         self._ensure_open()
-        task = self._output_task
-        if task is not None:
-            if not task.done():
-                task.cancel()
-            try:
-                await asyncio.shield(task)
-            except asyncio.CancelledError:
-                current = asyncio.current_task()
-                if current is not None and current.cancelling():
-                    raise
-        await self._lk.clear_output_queue()
-        await self._lk.send_data_event(
-            DataChannelEvent(event="control.interrupt", request_id=request_id)
+        if not isinstance(pcm, (bytes, bytearray)) or len(pcm) == 0 or len(pcm) % 2 != 0:
+            raise ValueError("pcm must be non-empty S16LE bytes")
+        sequence = getattr(self, "_external_audio_sequence", 0) + 1
+        self._external_audio_sequence = sequence
+        frame = (
+            b"EXAU"
+            + bytes([1])
+            + sequence.to_bytes(8, "big")
+            + int(timestamp_us).to_bytes(8, "big", signed=True)
+            + len(pcm).to_bytes(4, "big")
+            + bytes(pcm)
         )
-        await self._events.dispatch("interrupted", request_id)
+        await self.send_custom_event(
+            "external.audio.chunk",
+            {"frame": base64.b64encode(frame).decode("ascii")},
+        )
+
+    async def interrupt(
+        self,
+        request_id: str | None = None,
+        *,
+        interrupt_scope: str | None = None,
+    ) -> None:
+        """Stop voice, clear external audio, or both.
+
+        Omitted, blank, and VOICE_ONLY stop voice only.
+        BGM_ONLY clears queued external audio and leaves the local voice stream running.
+        VOICE_AND_ACCOMPANIMENT stops voice and clears queued external audio.
+        """
+        self._ensure_open()
+        scope = None if interrupt_scope is None else interrupt_scope.strip()
+        if scope == "":
+            scope = None
+        if scope not in (None, "VOICE_ONLY", "VOICE_AND_ACCOMPANIMENT", "BGM_ONLY"):
+            raise ValueError("interrupt_scope")
+        if scope != "BGM_ONLY":
+            task = self._output_task
+            if task is not None:
+                if not task.done():
+                    task.cancel()
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    current = asyncio.current_task()
+                    if current is not None and current.cancelling():
+                        raise
+            await self._lk.clear_output_queue()
+        data = {}
+        if scope in ("VOICE_AND_ACCOMPANIMENT", "BGM_ONLY"):
+            data = {"interruptScope": scope}
+        await self._lk.send_data_event(
+            DataChannelEvent(
+                event="control.interrupt", request_id=request_id, data=data
+            )
+        )
+        if scope != "BGM_ONLY":
+            await self._events.dispatch("interrupted", request_id)
 
     async def send_voice_start(self, request_id: str) -> None:
         await self.send_custom_event("input.voice.start", request_id=request_id)
