@@ -29,7 +29,7 @@ Do not list file names, internal refactors, or version-number-only commits. Do n
 
 `README.md` and `README.zh.md` are the guide, not the changelog. Do not put new release text at the top. Put usage in the existing section for that API, or add a section there when none fits. Do not add a README entry for every field change. Update the README when an example uses the field, when the caller needs the parameter, or when the parameter is important. Keep the English and Chinese guides equivalent.
 
-Every public method and parameter must have a commented call example in the SDK's own example file. The example shows a caller how to use it. Do not run those examples in the normal demo flow. Java uses `liveavatar-channel-server-example` `DemoAgentService`. Python Channel uses `liveavatar_channel_sdk/example/live_avatar_service_simulator.py`. Python RTC uses `examples/basic_agent.py`.
+Every public method and parameter must have a commented call example in the SDK's own example file. The example shows a caller how to use it. Do not run those examples in the normal demo flow. Java uses `liveavatar-channel-server-example` `DemoAgentService`. Python Channel uses `liveavatar_channel_sdk/example/live_avatar_service_simulator.py`. Python RTC uses `examples/basic_agent.py`. A new or changed public method is not done until that commented call is in the same change. If the call is not part of the running demo, the comment is still required.
 
 Skip only after that person explicitly says not to bump the version. Put this exact line in the commit message:
 

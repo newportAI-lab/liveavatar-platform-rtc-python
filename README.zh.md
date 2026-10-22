@@ -7,7 +7,7 @@
 帧进入后端，开发者生成的 TTS PCM 音频驱动数字人说话。本包不提供平台 TTS
 或文本输入兼容 API。
 
-**版本 1.0.2**
+**版本 1.0.3**
 
 ## 安装
 
@@ -104,7 +104,9 @@ await session.interrupt(interrupt_scope="VOICE_AND_ACCOMPANIMENT")
 
 `PlatformRTCClient` 新增可选参数 `external_audio_config`。不传则跟随本次语音格式。非 0 的 `sampleRate` 只能是 16000、24000、44100 或 48000，`channels` 为 1 或 2。开播时以 `externalAudioConfig` 发送。
 
-`publish_external_audio(pcm)` 是新增方法。`pcm` 为 16 位小端 PCM，只播放，不驱动口型。不要用 `publish_audio` 发送这段音频。采样率和声道必须与 `external_audio_config` 一致；未设置该参数时，必须与本次会话的 TTS 音频格式一致。
+`publish_external_audio(pcm)` 发送伴奏。`pcm` 为 16 位小端 PCM，只播放，不驱动口型。不要用 `publish_audio` 发送这段音频。采样率和声道必须与 `external_audio_config` 一致；未设置该参数时，必须与本次会话的 TTS 音频格式一致。
+
+`send_external_playback(request_id, response_id, frames)` 在平台 TTS 会话中把开发者 PCM 当人声轮播放。控制事件是 `response.audio.start` 和 `response.audio.finish`，`data.purpose` 为 `external`。PCM 仍是 LiveKit 裸音频，不加 WebSocket 帧头。SDK 不重采样。Dispatcher 必须已经接受 `purpose=external`，并按裸 PCM 转发 Agent 音轨。
 
 PCM 会经过 base64 放进数据通道消息，因此 PCM 本身不要超过 48000 字节，编码后的消息才能保持在 65536 字节以内。超过这个限制的帧会被关闭。后续每个包都要在已发送音频播放完之前送到。例如一包含 200 毫秒音频时，不要等满 200 毫秒再发下一包。第一包可以比后面的包更长，用来先准备一段可播放的音频，但仍然不能超过上面的大小限制。
 

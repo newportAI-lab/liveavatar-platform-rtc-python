@@ -127,6 +127,14 @@ if __name__ == "__main__":
 #     The first packet may be longer than later packets, but not over that limit.
 #     await session.publish_external_audio(pcm)
 #     await session.publish_external_audio(pcm, timestamp_us=0)
+#     Platform TTS song. This is the voice turn, not accompaniment.
+#     song_pcm is 24000 Hz, mono, 16-bit raw PCM. Do not add a WebSocket frame header.
+#     The SDK does not resample.
+#     song = AudioFrame.from_pcm(song_pcm, 24000)
+#     async def song_frames():
+#         yield song
+#     await session.send_external_playback(request_id, response_id, song_frames())
+#     Sends response.audio.start and response.audio.finish with data.purpose=external.
 #     interrupt adds the string parameter interrupt_scope.
 #     await session.interrupt()  # VOICE_ONLY: stop voice and cancel the local voice stream
 #     await session.interrupt(interrupt_scope="VOICE_ONLY")
