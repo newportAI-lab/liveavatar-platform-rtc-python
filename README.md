@@ -7,7 +7,7 @@ ASR, LLM, and TTS. The SDK connects that pipeline to the platform LiveKit room:
 user audio arrives as PCM frames, and your TTS PCM frames drive avatar speech.
 There is no platform-TTS or text-input compatibility API in this package.
 
-**Version 1.0.2**
+**Version 1.0.3**
 
 ## Install
 
@@ -106,7 +106,9 @@ await session.interrupt(interrupt_scope="VOICE_AND_ACCOMPANIMENT")
 
 `PlatformRTCClient` adds the optional parameter `external_audio_config`. Omit it to follow the session voice format. A non-zero `sampleRate` must be 16000, 24000, 44100, or 48000. `channels` is 1 or 2. It is sent as `externalAudioConfig` on session start.
 
-`publish_external_audio(pcm)` is a new method. `pcm` is 16-bit little-endian PCM and is played without driving lip sync. Do not use `publish_audio` for this audio. Its sample rate and channel count must match `external_audio_config` when that parameter is set. When it is not set, they must match the TTS audio format used for this session.
+`publish_external_audio(pcm)` sends accompaniment. `pcm` is 16-bit little-endian PCM and is played without driving lip sync. Do not use `publish_audio` for this audio. Its sample rate and channel count must match `external_audio_config` when that parameter is set. When it is not set, they must match the TTS audio format used for this session.
+
+`send_external_playback(request_id, response_id, frames)` plays developer PCM as the voice turn while platform TTS is enabled. The control events are `response.audio.start` and `response.audio.finish` with `data.purpose=external`. The PCM stays raw LiveKit audio and is not wrapped in the WebSocket frame header. The SDK does not resample. This requires a Dispatcher that accepts `purpose=external` and forwards the agent audio track as raw PCM.
 
 The PCM is base64-encoded inside a data-channel message, so keep the PCM itself at or below 48000 bytes. The encoded message then stays under the 65536-byte limit that closes an oversized frame. Send each later packet before the audio already queued has finished playing. For example, do not wait a full 200 ms before sending the next 200 ms packet. Make the first packet longer than the later packets, while still staying under the size limit, so playback has audio waiting when it starts.
 

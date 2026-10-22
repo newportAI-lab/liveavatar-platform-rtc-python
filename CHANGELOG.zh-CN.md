@@ -2,6 +2,10 @@
 
 本文件记录本 SDK 的主要变化。日期为发布日期。
 
+## [1.0.3] - 2026-10-22
+
+1. Added: `send_external_playback(request_id, response_id, frames)` 在平台 TTS 会话中把开发者 PCM 当人声轮播放。它发送 `response.audio.start` 和 `response.audio.finish`，`data.purpose` 为 `external`。PCM 按 LiveKit 裸音频发布，不加 WebSocket 帧头。SDK 不重采样。这不是 `publish_external_audio`；后者仍是伴奏，不会替换口播。start 之后如果发布失败，仍会发送 `response.audio.finish`。平台 Dispatcher 必须接受 `purpose=external`，并按裸 PCM 转发 Agent 音轨。
+
 ## [1.0.2] - 2026-10-15
 
 1. Added: `PlatformRTCClient` 新增可选参数 `external_audio_config`。不传则跟随本次语音格式。非 0 的 `sampleRate` 只能是 16000、24000、44100 或 48000，`channels` 为 1 或 2。开播时以 `externalAudioConfig` 发送。

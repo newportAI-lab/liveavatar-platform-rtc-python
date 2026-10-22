@@ -2,6 +2,10 @@
 
 Notable changes to this SDK are documented here. The date is the release day.
 
+## [1.0.3] - 2026-10-22
+
+1. Added: `send_external_playback(request_id, response_id, frames)` plays developer PCM as the voice turn while platform TTS is enabled. It sends `response.audio.start` and `response.audio.finish` with `data.purpose=external`. The PCM is published as raw LiveKit audio and is not given a WebSocket frame header. The SDK does not resample. This is not `publish_external_audio`, which remains accompaniment and does not replace speech. If publishing fails after start, `response.audio.finish` is still sent. The platform Dispatcher must accept `purpose=external` and forward the agent audio track as raw PCM.
+
 ## [1.0.2] - 2026-10-15
 
 1. Added: `PlatformRTCClient` adds the optional parameter `external_audio_config`. Omit it to follow the session voice format. A non-zero `sampleRate` must be 16000, 24000, 44100, or 48000. `channels` is 1 or 2. On session start it is sent as `externalAudioConfig`.

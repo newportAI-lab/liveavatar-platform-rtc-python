@@ -235,6 +235,19 @@ class Session:
             if self._output_task is output_task:
                 self._output_task = None
 
+    async def send_external_playback(self, request_id: str, response_id: str, frames) -> None:
+        """与 Channel SDK 相同的外部 PCM 轮。控制事件走 data channel，PCM 仍按原样发布。"""
+        marker = {"purpose": "external"}
+        await self.send_custom_event(
+            "response.audio.start", marker, request_id=request_id, response_id=response_id
+        )
+        try:
+            await self.publish_audio_stream(frames)
+        finally:
+            await self.send_custom_event(
+                "response.audio.finish", marker, request_id=request_id, response_id=response_id
+            )
+
     async def send_custom_event(
         self,
         event: str,
