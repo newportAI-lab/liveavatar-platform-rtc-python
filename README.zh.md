@@ -56,6 +56,7 @@ AI 服务的管线骨架。它会连接房间并消费用户音频，但在接�
 LLM 和 TTS 前会刻意不生成数字人语音；程序启动时也会打印此警告。
 
 完整 Platform RTC 协议模型见 [`PROTOCOL.zh.md`](PROTOCOL.zh.md)。
+会话中切视频见 [切视频](#切视频)。
 
 ## 连接与就绪阶段
 
@@ -165,8 +166,38 @@ RTC SDK 不提供 `response.chunk` / `response.done` helper。数字人语音由
 使用 `await session.close()` 或退出客户端上下文关闭连接；上下文管理器还会停止
 远端平台会话。
 
+## 切视频
+
+没有 `switch_video()`。session 打开后，建议先 `wait_for_scene_ready()`，再发送
+`scene.switchVideo`。**事件名在前**，`request_id` 是关键字参数。不要按 Channel
+SDK 的 `(request_id, event, data)` 去调。
+
+```python
+await session.send_custom_event(
+    "scene.switchVideo",
+    {
+        "onceVideos": ["fist_bump"],  # resourceId 或 alias
+        "loopVideos": ["01KTJNMD7NZJF4KMGCCFSTJN4X"],
+        "mode": "HARD",  # HARD 硬切，GRACEFUL 软切（默认）
+    },
+)
+```
+
+| 字段 | 含义 |
+|---|---|
+| `onceVideos` | 按顺序各播一次，然后进入循环内容 |
+| `loopVideos` | `onceVideos` 之后循环。编排分组非空时忽略 |
+| `videoChoreographyGroups` | 分组抽片，每组随机一条 |
+| `mode` | `GRACEFUL`（软切，默认）、`HARD`（硬切）。无法识别时按 `GRACEFUL` |
+
+alias：3–32 位，字母开头，小写字母数字下划线，不能以下划线结尾。字段名必须是 camelCase。alias 需要 1.0.2 或更高。画面切换看 `SCENE_RESOURCE_TRANSITION`。`examples/basic_agent.py` 里这段调用是注释。
+
 ## 适用范围
 
 本包仅面向 Platform RTC 后端 Agent，通过 LiveKit 音频 Track 传输 PCM，
 通过 LiveKit Data Channel 传输结构化控制事件。其公开接口仅包含 v2 Platform
 RTC Agent API，不包含旧版兼容别名。
+
+## 更新记录
+
+[CHANGELOG.zh-CN.md](./CHANGELOG.zh-CN.md)

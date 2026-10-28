@@ -57,6 +57,7 @@ but intentionally produces no avatar speech until real developer ASR, LLM, and
 TTS are integrated; it prints this warning at startup.
 
 For the full Platform RTC protocol model, see [`PROTOCOL.md`](PROTOCOL.md).
+Switch video during a session: [Switch video](#switch-video).
 
 ## Connection and readiness stages
 
@@ -175,9 +176,39 @@ custom event that your own frontend or backend understands.
 Close with `await session.close()` or leave the client context manager. The
 context manager also stops the remote platform session.
 
+## Switch video
+
+There is no `switch_video()`. After the session is open, preferably after
+`wait_for_scene_ready()`, send `scene.switchVideo`. **Event name comes first.**
+`request_id` is a keyword argument. Do not call it as `(request_id, event, data)`.
+
+```python
+await session.send_custom_event(
+    "scene.switchVideo",
+    {
+        "onceVideos": ["fist_bump"],  # resourceId or alias
+        "loopVideos": ["01KTJNMD7NZJF4KMGCCFSTJN4X"],
+        "mode": "HARD",  # HARD immediate, GRACEFUL wait (default)
+    },
+)
+```
+
+| Field | Meaning |
+|---|---|
+| `onceVideos` | Play each item once, then enter loop content |
+| `loopVideos` | Loop after `onceVideos`. Ignored when `videoChoreographyGroups` is non-empty |
+| `videoChoreographyGroups` | Groups of clips; each round picks one item at random from each group |
+| `mode` | `GRACEFUL` (soft cut, default), `HARD` (hard cut). Unknown values become `GRACEFUL` |
+
+Each item may be a resource ID or a base-video alias (3–32 chars, starts with a letter, lowercase letters/digits/underscore, not ending with `_`). Field names must be camelCase. Alias support needs 1.0.2 or later. Watch `SCENE_RESOURCE_TRANSITION`. The example in `examples/basic_agent.py` keeps this call commented.
+
 ## Scope
 
 This package is only for Platform RTC agent backends. It transports PCM audio
 over LiveKit audio tracks and structured control events over the LiveKit data
 channel. Its public surface contains only the v2 Platform RTC agent API, without
 legacy compatibility aliases.
+
+## Changelog
+
+[CHANGELOG.md](./CHANGELOG.md)
