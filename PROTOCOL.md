@@ -159,7 +159,29 @@ Common outgoing helpers:
 | `interrupt(request_id=None, interrupt_scope=None)` | `control.interrupt` | Omit, blank, or `VOICE_ONLY`: stop voice only. `BGM_ONLY`: clear queued external audio only and keep the local voice stream. `VOICE_AND_ACCOMPANIMENT`: stop voice and clear queued external audio. Base-video audio is never cleared. |
 | `publish_external_audio(pcm)` | `external.audio.chunk` | Send accompaniment PCM. Do not use `publish_audio` |
 | `send_external_playback(request_id, response_id, frames)` | `response.audio.start` / LiveKit audio / `response.audio.finish` | Play developer PCM as the voice turn. `data.purpose` is `external`. Raw PCM, no WebSocket header |
-| `send_custom_event(event, data, ...)` | custom | Application-owned event envelope |
+| `send_custom_event(event, data, ...)` | custom | Application-owned event envelope. Use `scene.switchVideo` to change the playing video |
+
+### `scene.switchVideo`
+
+There is no typed `switch_video` method. Send:
+
+```python
+await session.send_custom_event(
+    "scene.switchVideo",
+    {
+        "onceVideos": ["fist_bump"],
+        "loopVideos": ["LOOP_ID"],
+        "mode": "HARD",
+    },
+)
+```
+
+The event name comes first. `request_id` is a keyword argument. Field names are
+camelCase. `mode` is `HARD` or `GRACEFUL` (default). Unknown
+values become `GRACEFUL`. Items may be a resource ID or a base-video alias.
+At least one of `onceVideos`, `loopVideos`, `videoChoreographyGroups` must be
+non-empty. Watch `scene.resourceTransition` for the cut. Full table:
+[README.md](./README.md#switch-video).
 
 There are intentionally no `response.chunk` / `response.done` helper methods in
 the RTC SDK. Avatar speech is transported by the developer-published LiveKit

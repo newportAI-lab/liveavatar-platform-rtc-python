@@ -118,6 +118,7 @@ if __name__ == "__main__":
 #     await session.send_custom_event("scene.switchVideo", {
 #         "onceVideos": ["fist_bump"],  # resourceId or alias
 #         "loopVideos": ["01KTJNMD7NZJF4KMGCCFSTJN4X"],
+#         "mode": "HARD",  # HARD immediate, GRACEFUL wait (default)
 #     })
 #     pcm = b"\x00" * 38400  # 200 ms, 48000 Hz, stereo, 16-bit
 #     The PCM rate and channel count must match external_audio_config when set.

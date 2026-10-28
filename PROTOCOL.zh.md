@@ -148,7 +148,28 @@ SDK 会通过 `session.on(SCENE_RESOURCE_TRANSITION)` 将它作为 `DataChannelE
 | `interrupt(request_id=None, interrupt_scope=None)` | `control.interrupt` | 不传、空字符串或 `VOICE_ONLY`：只停止人声。`BGM_ONLY`：只清还没播出的外部音频，本地人声继续推。`VOICE_AND_ACCOMPANIMENT`：停止人声并清还没播出的外部音频。底板视频自带声音不会被清掉。 |
 | `publish_external_audio(pcm)` | `external.audio.chunk` | 发送伴奏 PCM。不要用 `publish_audio` |
 | `send_external_playback(request_id, response_id, frames)` | `response.audio.start` / LiveKit 音频 / `response.audio.finish` | 把开发者 PCM 当人声轮播放。`data.purpose` 为 `external`。裸 PCM，不加 WebSocket 帧头 |
-| `send_custom_event(event, data, ...)` | 自定义 | 应用自有事件 envelope |
+| `send_custom_event(event, data, ...)` | 自定义 | 应用自有事件 envelope。切视频发送 `scene.switchVideo` |
+
+### `scene.switchVideo`
+
+没有 typed `switch_video` 方法。发送：
+
+```python
+await session.send_custom_event(
+    "scene.switchVideo",
+    {
+        "onceVideos": ["fist_bump"],
+        "loopVideos": ["LOOP_ID"],
+        "mode": "HARD",
+    },
+)
+```
+
+事件名在前，`request_id` 是关键字参数。字段名必须是 camelCase。`mode` 为 `HARD` 或
+`GRACEFUL`（默认）。无法识别时按 `GRACEFUL`。每一项可以是
+resourceId 或底板 alias。`onceVideos`、`loopVideos`、`videoChoreographyGroups`
+至少一个非空。画面切换看 `scene.resourceTransition`。完整说明见
+[README.zh.md](./README.zh.md#切视频)。
 
 RTC SDK 有意不提供 `response.chunk` / `response.done` helper。数字人语音通过
 开发者发布到 LiveKit 的音频 Track 传输。
