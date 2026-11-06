@@ -7,7 +7,8 @@ ASR, LLM, and TTS. The SDK connects that pipeline to the platform LiveKit room:
 user audio arrives as PCM frames, and your TTS PCM frames drive avatar speech.
 There is no platform-TTS or text-input compatibility API in this package.
 
-**Version 1.0.3**
+**Version 1.1.0** adds response lifecycle tracking and streaming system prompts
+while preserving the existing audio and one-shot prompt APIs.
 
 ## Install
 
@@ -172,6 +173,40 @@ The RTC SDK does not provide `response.chunk` / `response.done` helpers. Avatar
 speech is driven by the developer-published LiveKit audio track, not by platform
 text TTS. If your application needs subtitles or diagnostics, send an explicit
 custom event that your own frontend or backend understands.
+
+## Response lifecycle and prompts
+
+Use `RESPONSE_STATE` for response-specific completion decisions. Do not infer a
+response completion from `SESSION_STATE`, `IDLE`, prompt `done`, audio `finish`,
+or track EOS.
+
+```python
+from liveavatar_rtc import RESPONSE_STATE
+
+@session.on(RESPONSE_STATE)
+async def on_response_state(event):
+    print(event.response_id, event.state, event.reason)
+
+prompt = await session.begin_prompt("course-step-42")
+await prompt.send("Now let's look at the next question.")
+await prompt.done()  # input ended; playout may still be running
+terminal = await prompt.wait_terminal(timeout=30)
+if terminal.state == "FINISHED" and terminal.reason == "COMPLETED":
+    advance_course_once()
+```
+
+`begin_prompt()` generates a response ID unless one is supplied. Concurrent
+`send()` calls receive unique, increasing chunk sequence numbers. The legacy
+`await session.send_prompt(text)` one-shot message remains available.
+
+For developer TTS, establish response identity before publishing RTC audio:
+
+```python
+audio = await session.begin_audio_response(request_id, response_id=None)
+await audio.send_stream(tts_frames())
+await audio.done()  # does not mean FINISHED/COMPLETED
+terminal = await audio.wait_terminal(timeout=30)
+```
 
 Close with `await session.close()` or leave the client context manager. The
 context manager also stops the remote platform session.

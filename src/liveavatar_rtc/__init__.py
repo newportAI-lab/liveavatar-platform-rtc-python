@@ -5,6 +5,7 @@ from .errors import (
     AudioFormatError,
     AudioPublishError,
     DataChannelProtocolError,
+    PromptStreamClosedError,
     RTCConnectionError,
     RTCSDKError,
     SessionClosedError,
@@ -17,6 +18,7 @@ from .session import (
     DISCONNECTED,
     ERROR,
     IDLE_TRIGGER,
+    RESPONSE_STATE,
     SCENE_RESOURCE_TRANSITION,
     SCENE_READY,
     SESSION_CLOSING,
@@ -34,7 +36,9 @@ from .types import (
     DataChannelEvent,
     FrontendConnection,
     SessionInfo,
+    ResponseStateEvent,
 )
+from .response import AudioResponse, PromptStream, ResponseHandle
 
 try:
     __version__ = version("liveavatar-platform-rtc")
@@ -52,9 +56,14 @@ __all__ = [
     "AudioFormatError",
     "AudioPublishError",
     "DataChannelProtocolError",
+    "PromptStreamClosedError",
     "FrontendConnection",
     "SessionInfo",
     "DataChannelEvent",
+    "ResponseStateEvent",
+    "ResponseHandle",
+    "PromptStream",
+    "AudioResponse",
     "AudioFrame",
     "AudioTrackInfo",
     "PlatformRTCClient",
@@ -64,6 +73,7 @@ __all__ = [
     "SESSION_STATE",
     "SESSION_CLOSING",
     "IDLE_TRIGGER",
+    "RESPONSE_STATE",
     "ERROR",
     "CUSTOM_EVENT",
     "USER_AUDIO_FRAME",

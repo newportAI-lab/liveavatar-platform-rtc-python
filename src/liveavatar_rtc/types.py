@@ -25,12 +25,26 @@ class SessionInfo:
 class DataChannelEvent:
     event: str
     data: dict[str, Any] = field(default_factory=dict)
+    session_id: str | None = None
     request_id: str | None = None
     response_id: str | None = None
     seq: int | None = None
     timestamp: int | None = None
     participant_identity: str | None = None
     topic: str | None = None
+
+
+@dataclass(frozen=True)
+class ResponseStateEvent:
+    """A response lifecycle event. State and reason remain strings for forward compatibility."""
+
+    session_id: str
+    request_id: str
+    response_id: str
+    seq: int
+    timestamp: int
+    state: str
+    reason: str | None = None
 
 
 @dataclass

@@ -65,7 +65,6 @@ def test_rtc_public_surface_excludes_platform_tts_and_text(manager):
         "send_response_start",
         "send_response_chunk",
         "send_response_done",
-        "send_prompt",
         "send_subtitle",
         "send_response_audio_prompt_start",
         "send_response_audio_prompt_finish",

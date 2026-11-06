@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import AsyncIterable, Callable
 
 from .errors import (
@@ -11,7 +12,8 @@ from .errors import (
 )
 from .event_dispatcher import Callback, EventDispatcher
 from .livekit_manager import LiveKitManager
-from .types import AudioFrame, DataChannelEvent, FrontendConnection
+from .response import AudioResponse, PromptStream, ResponseHandle
+from .types import AudioFrame, DataChannelEvent, FrontendConnection, ResponseStateEvent
 
 SCENE_READY = "scene.ready"
 SCENE_RESOURCE_TRANSITION = "scene.resourceTransition"
@@ -20,6 +22,7 @@ SESSION_CLOSING = "session.closing"
 IDLE_TRIGGER = "system.idleTrigger"
 ERROR = "error"
 CUSTOM_EVENT = "custom_event"
+RESPONSE_STATE = "response.state"
 
 USER_AUDIO_FRAME = "user_audio_frame"
 USER_AUDIO_TRACK_SUBSCRIBED = "user_audio_track_subscribed"
@@ -35,6 +38,7 @@ _KNOWN_DATA_EVENTS = {
     SESSION_CLOSING,
     IDLE_TRIGGER,
     ERROR,
+    RESPONSE_STATE,
 }
 
 
@@ -60,6 +64,9 @@ class Session:
         self._closed = False
         self._output_task: asyncio.Task[None] | None = None
         self._close_task: asyncio.Task[None] | None = None
+        self._responses: dict[str, ResponseHandle] = {}
+        self._last_response_seq: dict[str, int] = {}
+        self._response_lock = asyncio.Lock()
 
         self._user_event = asyncio.Event()
         self._scene_ready_event = asyncio.Event()
@@ -151,8 +158,109 @@ class Session:
         elif envelope.event == SESSION_CLOSING:
             self._closing = True
 
+        if envelope.event == RESPONSE_STATE:
+            await self._on_response_state(envelope)
+            return
+
         event = envelope.event if envelope.event in _KNOWN_DATA_EVENTS else CUSTOM_EVENT
         await self._events.dispatch(event, envelope)
+
+    async def _on_response_state(self, envelope: DataChannelEvent) -> None:
+        event = ResponseStateEvent(
+            session_id=envelope.session_id or self.session_id,
+            request_id=envelope.request_id or "",
+            response_id=envelope.response_id or "",
+            seq=envelope.seq if envelope.seq is not None else -1,
+            timestamp=envelope.timestamp if envelope.timestamp is not None else 0,
+            state=envelope.data["state"],
+            reason=envelope.data.get("reason"),
+        )
+        terminal_handle = None
+        async with self._response_lock:
+            last_seq = self._last_response_seq.get(event.session_id, -1)
+            if event.seq <= last_seq:
+                return
+            self._last_response_seq[event.session_id] = event.seq
+            handle = self._responses.get(event.response_id)
+            if (
+                handle is not None
+                and event.session_id == self.session_id
+                and handle.request_id == event.request_id
+                and event.state in {"REJECTED", "FINISHED"}
+                and handle._claim_terminal(event)
+            ):
+                terminal_handle = handle
+                self._responses.pop(event.response_id, None)
+        if terminal_handle is not None:
+            terminal_handle._resolve_terminal(event)
+        await self._events.dispatch(RESPONSE_STATE, event)
+
+    @staticmethod
+    def _require_id(value: str, name: str) -> None:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must be a non-empty string")
+
+    async def _register_response(self, handle: ResponseHandle) -> None:
+        async with self._response_lock:
+            if handle.response_id in self._responses:
+                raise ValueError(f"responseId is already registered: {handle.response_id}")
+            self._responses[handle.response_id] = handle
+
+    async def begin_prompt(
+        self, request_id: str, response_id: str | None = None
+    ) -> PromptStream:
+        self._ensure_open()
+        self._require_id(request_id, "requestId")
+        response_id = response_id or str(uuid.uuid4())
+        self._require_id(response_id, "responseId")
+        stream = PromptStream(request_id, response_id, self._lk.send_data_event)
+        await self._register_response(stream)
+        try:
+            await self._lk.send_data_event(
+                DataChannelEvent(
+                    event="system.prompt.start",
+                    request_id=request_id,
+                    response_id=response_id,
+                )
+            )
+        except BaseException:
+            async with self._response_lock:
+                self._responses.pop(response_id, None)
+            raise
+        return stream
+
+    async def send_prompt(self, text: str) -> None:
+        self._ensure_open()
+        await self._lk.send_data_event(DataChannelEvent(event="system.prompt", data={"text": text}))
+
+    async def begin_audio_response(
+        self, request_id: str, response_id: str | None = None
+    ) -> AudioResponse:
+        self._ensure_open()
+        self._require_id(request_id, "requestId")
+        response_id = response_id or str(uuid.uuid4())
+        self._require_id(response_id, "responseId")
+        response = AudioResponse(
+            request_id,
+            response_id,
+            self._lk.send_data_event,
+            self.publish_audio,
+            self.publish_audio_stream,
+        )
+        await self._register_response(response)
+        try:
+            await self._lk.send_data_event(
+                DataChannelEvent(
+                    event="response.audio.start",
+                    request_id=request_id,
+                    response_id=response_id,
+                )
+            )
+        except BaseException:
+            async with self._response_lock:
+                self._responses.pop(response_id, None)
+            raise
+        return response
 
     async def _on_disconnected(self, reason: str) -> None:
         self._mark_closed()

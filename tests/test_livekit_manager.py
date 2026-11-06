@@ -493,7 +493,7 @@ class TestDataChannelEvents:
         packet = MagicMock(
             topic="liveavatar",
             participant=MagicMock(identity="coordinator_test-session"),
-            data=b'{"event":"session.state","requestId":"r1","responseId":"p1","seq":4,"timestamp":99,"data":{"state":"IDLE"}}',
+            data=b'{"event":"session.state","sessionId":"test-session","requestId":"r1","responseId":"p1","seq":4,"timestamp":99,"data":{"state":"IDLE"}}',
         )
 
         await _mgr(lk)._on_data_received(packet)
@@ -501,6 +501,7 @@ class TestDataChannelEvents:
         assert received == [
             DataChannelEvent(
                 event="session.state",
+                session_id="test-session",
                 data={"state": "IDLE"},
                 request_id="r1",
                 response_id="p1",
@@ -602,6 +603,16 @@ class TestDataChannelEvents:
     @pytest.mark.parametrize(
         "message",
         [
+            {"event": "response.state", "data": {"state": "FINISHED"}},
+            {
+                "event": "response.state",
+                "sessionId": "session-1",
+                "requestId": "request-1",
+                "responseId": "response-1",
+                "seq": 1,
+                "timestamp": 1,
+                "data": {"state": 1},
+            },
             {"event": "session.state", "data": {"state": 1}},
             {"event": "error", "data": {}},
             {"event": "scene.ready", "data": []},

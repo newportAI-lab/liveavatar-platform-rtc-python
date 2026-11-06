@@ -20,6 +20,7 @@ _KNOWN_DATA_EVENTS = {
     "session.closing",
     "system.idleTrigger",
     "error",
+    "response.state",
 }
 
 
@@ -189,6 +190,7 @@ class LiveKitManager:
         envelope = {
             "event": event.event,
             "data": event.data,
+            "sessionId": event.session_id,
             "requestId": event.request_id,
             "responseId": event.response_id,
             "seq": event.seq,
@@ -398,6 +400,7 @@ class LiveKitManager:
         envelope = DataChannelEvent(
             event=message["event"],
             data=message.get("data") or {},
+            session_id=message.get("sessionId"),
             request_id=message.get("requestId"),
             response_id=message.get("responseId"),
             seq=message.get("seq"),
@@ -409,7 +412,7 @@ class LiveKitManager:
 
     @staticmethod
     def _validate_data_event(message: dict[str, Any]) -> None:
-        for field in ("requestId", "responseId"):
+        for field in ("sessionId", "requestId", "responseId"):
             if message.get(field) is not None and not isinstance(message[field], str):
                 raise ValueError(f"{field} must be a string")
         for field in ("seq", "timestamp"):
@@ -427,6 +430,17 @@ class LiveKitManager:
             raise ValueError("data must be an object for known events")
         if event == "session.state" and not isinstance(data.get("state"), str):
             raise ValueError("session.state data.state must be a string")
+        if event == "response.state":
+            for field in ("sessionId", "requestId", "responseId"):
+                if not isinstance(message.get(field), str) or not message[field].strip():
+                    raise ValueError(f"response.state {field} must be a non-empty string")
+            for field in ("seq", "timestamp"):
+                if not isinstance(message.get(field), int) or isinstance(message[field], bool):
+                    raise ValueError(f"response.state {field} must be an integer")
+            if not isinstance(data.get("state"), str):
+                raise ValueError("response.state data.state must be a string")
+            if data.get("reason") is not None and not isinstance(data["reason"], str):
+                raise ValueError("response.state data.reason must be a string")
         if event == "scene.resourceTransition":
             previous_resource_id = data.get("previousResourceId")
             next_resource_id = data.get("nextResourceId")

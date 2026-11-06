@@ -35,3 +35,7 @@ class AudioPublishError(RTCSDKError):
 
 class DataChannelProtocolError(RTCSDKError):
     pass
+
+
+class PromptStreamClosedError(RTCSDKError):
+    pass
