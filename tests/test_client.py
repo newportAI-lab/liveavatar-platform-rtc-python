@@ -65,7 +65,7 @@ async def test_connect_returns_after_agent_track_publish(client, api, manager, m
     assert session.is_agent_connected
     manager.connect.assert_awaited_once()
     manager.wait_for_user.assert_not_called()
-    api.start_session.assert_awaited_once_with("avatar")
+    api.start_session.assert_awaited_once_with("avatar", None)
     manager_factory.assert_called_once_with(
         session_id="sess-abc",
         sfu_url="wss://sfu",
@@ -74,6 +74,17 @@ async def test_connect_returns_after_agent_track_publish(client, api, manager, m
         input_sample_rate=16000,
         output_sample_rate=24000,
     )
+
+
+@pytest.mark.asyncio
+async def test_connect_passes_external_audio_config(api, manager_factory):
+    config = {"sampleRate": 48000, "channels": 2}
+    client = PlatformRTCClient(api_key="key", avatar_id="avatar", external_audio_config=config)
+    client._api = api
+
+    await client.connect()
+
+    api.start_session.assert_awaited_once_with("avatar", config)
 
 
 @pytest.mark.asyncio
@@ -252,7 +263,7 @@ async def test_reconnect_after_disconnect_uses_a_new_api_cycle():
         await client.disconnect()
         session = await client.connect()
     assert session.session_id == "two"
-    second_api.start_session.assert_awaited_once_with("avatar")
+    second_api.start_session.assert_awaited_once_with("avatar", None)
 
 
 @pytest.mark.asyncio
@@ -272,7 +283,7 @@ async def test_retry_after_connect_failure_uses_a_new_api_cycle():
             await client.connect()
         session = await client.connect()
     assert session.session_id == "two"
-    second_api.start_session.assert_awaited_once_with("avatar")
+    second_api.start_session.assert_awaited_once_with("avatar", None)
 
 
 @pytest.mark.asyncio

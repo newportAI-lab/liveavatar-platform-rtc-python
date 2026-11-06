@@ -1,4 +1,3 @@
-import inspect
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -78,9 +77,22 @@ class TestApiClientStartSession:
 
         assert info.output_sample_rate == 24000
 
-    def test_has_only_avatar_id_parameter(self):
-        parameters = inspect.signature(ApiClient.start_session).parameters
-        assert list(parameters) == ["self", "avatar_id"]
+    @pytest.mark.asyncio
+    async def test_external_audio_config_is_sent(self, client):
+        api, mock_http = client
+        response = MagicMock(spec=httpx.Response)
+        response.json.return_value = {
+            "code": 0,
+            "data": {"sessionId": "s", "agentToken": "t", "sfuUrl": "wss://sfu"},
+        }
+        mock_http.post.return_value = response
+        config = {"sampleRate": 48000, "channels": 2}
+
+        await api.start_session("avatar-1", config)
+
+        assert mock_http.post.call_args.kwargs["json"] == {
+            "avatarId": "avatar-1", "mode": "rtcAgent", "externalAudioConfig": config,
+        }
 
     @pytest.mark.asyncio
     async def test_api_error_nonzero_code(self, client):
