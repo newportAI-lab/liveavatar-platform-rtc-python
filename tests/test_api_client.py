@@ -1,3 +1,4 @@
+import inspect
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -93,6 +94,12 @@ class TestApiClientStartSession:
         assert mock_http.post.call_args.kwargs["json"] == {
             "avatarId": "avatar-1", "mode": "rtcAgent", "externalAudioConfig": config,
         }
+
+    def test_optional_start_parameters_preserve_avatar_first(self):
+        parameters = inspect.signature(ApiClient.start_session).parameters
+        assert list(parameters) == ["self", "avatar_id", "external_audio_config", "renderer_profile"]
+        assert parameters["external_audio_config"].default is None
+        assert parameters["renderer_profile"].default is None
 
     @pytest.mark.asyncio
     async def test_api_error_nonzero_code(self, client):

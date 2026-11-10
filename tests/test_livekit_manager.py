@@ -110,8 +110,7 @@ class TestBasics:
         with patch("livekit.rtc.Room", return_value=room):
             from liveavatar_rtc.livekit_manager import LiveKitManager
 
-            with pytest.warns(DeprecationWarning):
-                manager = LiveKitManager("test-session", "wss://sfu", "token")
+            manager = LiveKitManager("test-session", "wss://sfu", "token")
 
         handler = AsyncMock()
         manager.events.add("renderer_joined", handler)

@@ -7,8 +7,8 @@ ASR, LLM, and TTS. The SDK connects that pipeline to the platform LiveKit room:
 user audio arrives as PCM frames, and your TTS PCM frames drive avatar speech.
 There is no platform-TTS or text-input compatibility API in this package.
 
-**Version 1.1.0** adds response lifecycle tracking and streaming system prompts
-while preserving the existing audio and one-shot prompt APIs.
+The SDK supports response lifecycle tracking and streaming system prompts
+alongside the existing audio and one-shot prompt APIs.
 
 ## Install
 
@@ -59,6 +59,16 @@ TTS are integrated; it prints this warning at startup.
 
 For the full Platform RTC protocol model, see [`PROTOCOL.md`](PROTOCOL.md).
 Switch video during a session: [Switch video](#switch-video).
+
+## Session lip-sync model
+
+`PlatformRTCClient` adds optional string `renderer_profile`: `"normal"` forces ordinary human without automatic 4K selection, `"pet"` selects animal, and `"4k"` selects 4K. `None` omits the field and preserves existing platform rules. It is sent as `rendererProfile` in `/v1/session/start`. The low-level `ApiClient.start_session` accepts the same optional parameter.
+
+```python
+client = PlatformRTCClient(api_key=api_key, avatar_id=avatar_id, renderer_profile="pet")
+```
+
+The choice overrides Nacos avatar mapping and avatar configuration for this session only. Upgrade all target Dispatcher instances first; older servers may ignore this field. An unavailable explicit model fails instead of switching models. Stop and start a new session to change models; switching video does not change the model.
 
 ## Connection and readiness stages
 

@@ -7,8 +7,8 @@
 帧进入后端，开发者生成的 TTS PCM 音频驱动数字人说话。本包不提供平台 TTS
 或文本输入兼容 API。
 
-**版本 1.1.0** 新增精确的 response 生命周期跟踪和流式 system prompt，
-同时保留现有音频发送和一次性 prompt API。
+SDK 支持精确的 response 生命周期跟踪和流式 system prompt，
+同时提供音频发送和一次性 prompt API。
 
 ## 安装
 
@@ -58,6 +58,16 @@ LLM 和 TTS 前会刻意不生成数字人语音；程序启动时也会打印�
 
 完整 Platform RTC 协议模型见 [`PROTOCOL.zh.md`](PROTOCOL.zh.md)。
 会话中切视频见 [切视频](#切视频)。
+
+## 开播嘴唇驱动模型
+
+`PlatformRTCClient` 新增可选字符串 `renderer_profile`：`"normal"` 强制普通人物模型，不按分辨率自动选择 4K；`"pet"` 使用动物模型；`"4k"` 使用 4K 模型。`None` 时省略字段并保留原规则。通过 `/v1/session/start` 的 JSON 字段 `rendererProfile` 发送。底层 `ApiClient.start_session` 支持同名可选参数。
+
+```python
+client = PlatformRTCClient(api_key=api_key, avatar_id=avatar_id, renderer_profile="pet")
+```
+
+仅覆盖本次会话，优先于 Nacos avatar 映射和数字人配置，不回写共享配置。先升级目标全部 Dispatcher 实例，旧服务可能忽略字段。指定模型不可用时失败，不自动换模型。换模型须停播后新建会话；切视频不切模型。
 
 ## 连接与就绪阶段
 

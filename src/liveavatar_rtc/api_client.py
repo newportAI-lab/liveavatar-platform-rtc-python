@@ -34,8 +34,14 @@ class ApiClient:
         self,
         avatar_id: str,
         external_audio_config: dict | None = None,
+        renderer_profile: str | None = None,
     ) -> SessionInfo:
+        """Start with optional normal/pet/4k model; None follows existing platform rules."""
+        if renderer_profile is not None and renderer_profile not in ("normal", "pet", "4k"):
+            raise ValueError("renderer_profile must be normal, pet, or 4k")
         body: dict = {"avatarId": avatar_id, "mode": "rtcAgent"}
+        if renderer_profile is not None:
+            body["rendererProfile"] = renderer_profile
         if external_audio_config is not None:
             body["externalAudioConfig"] = external_audio_config
         resp = await self._client.post(
