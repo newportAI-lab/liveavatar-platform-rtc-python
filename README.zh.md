@@ -67,7 +67,7 @@ LLM 和 TTS 前会刻意不生成数字人语音；程序启动时也会打印�
 client = PlatformRTCClient(api_key=api_key, avatar_id=avatar_id, renderer_profile="pet")
 ```
 
-仅覆盖本次会话，优先于 Nacos avatar 映射和数字人配置，不回写共享配置。先升级目标全部 Dispatcher 实例，旧服务可能忽略字段。指定模型不可用时失败，不自动换模型。换模型须停播后新建会话；切视频不切模型。
+所选模型用于本次会话。
 
 ## 连接与就绪阶段
 

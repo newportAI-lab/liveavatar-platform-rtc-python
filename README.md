@@ -68,7 +68,7 @@ Switch video during a session: [Switch video](#switch-video).
 client = PlatformRTCClient(api_key=api_key, avatar_id=avatar_id, renderer_profile="pet")
 ```
 
-The choice overrides Nacos avatar mapping and avatar configuration for this session only. Upgrade all target Dispatcher instances first; older servers may ignore this field. An unavailable explicit model fails instead of switching models. Stop and start a new session to change models; switching video does not change the model.
+The selected model applies to this session.
 
 ## Connection and readiness stages
 
