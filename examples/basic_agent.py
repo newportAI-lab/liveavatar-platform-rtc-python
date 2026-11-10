@@ -24,6 +24,12 @@ async def developer_pipeline(
 
 
 async def main() -> None:
+    # Optional per-session model (not enabled by default):
+    # client = PlatformRTCClient(api_key=API_KEY, avatar_id=AVATAR_ID, renderer_profile="pet")
+    # String values: normal forces ordinary human, pet selects animal, 4k selects 4K.
+    # None omits rendererProfile and follows existing platform rules.
+    # Low-level equivalent: await api.start_session(AVATAR_ID, renderer_profile="pet")
+    # Requires an upgraded Dispatcher; cannot change the model of an active session.
     print(
         "WARNING: provider-free demo consumes user audio but produces no avatar "
         "speech; integrate developer ASR/LLM/TTS to enable responses."

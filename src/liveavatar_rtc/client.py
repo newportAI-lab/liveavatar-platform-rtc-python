@@ -19,7 +19,12 @@ _DEFAULT_BASE_URL = "https://facemarket.ai/vih/dispatcher"
 
 
 class PlatformRTCClient:
-    """Main entry point for Live Avatar Platform RTC agent sessions."""
+    """Main entry point for Live Avatar Platform RTC agent sessions.
+
+    renderer_profile is an optional string: normal forces ordinary human,
+    pet selects animal, 4k selects 4K. None follows the existing platform rules.
+    Requires a dispatcher supporting rendererProfile; cannot change a live session.
+    """
 
     def __init__(
         self,
@@ -30,7 +35,10 @@ class PlatformRTCClient:
         output_sample_rate: int = 24000,
         sandbox: bool = False,
         external_audio_config: dict | None = None,
+        renderer_profile: str | None = None,
     ) -> None:
+        if renderer_profile is not None and renderer_profile not in ("normal", "pet", "4k"):
+            raise ValueError("renderer_profile must be normal, pet, or 4k")
         if base_url is None:
             base_url = os.environ.get("LIVEAVATAR_BASE_URL", _DEFAULT_BASE_URL)
         self._api_key = api_key
@@ -39,6 +47,7 @@ class PlatformRTCClient:
         self._api = self._new_api()
         self._avatar_id = avatar_id
         self._external_audio_config = external_audio_config
+        self._renderer_profile = renderer_profile
         self._input_sample_rate = input_sample_rate
         self._output_sample_rate = output_sample_rate
         self._session: Session | None = None
@@ -104,9 +113,14 @@ class PlatformRTCClient:
         await self._prepare_connect_cycle()
 
         try:
-            info = await self._api.start_session(
-                self._avatar_id, self._external_audio_config
-            )
+            if self._renderer_profile is None and self._external_audio_config is None:
+                info = await self._api.start_session(self._avatar_id)
+            elif self._renderer_profile is None:
+                info = await self._api.start_session(self._avatar_id, self._external_audio_config)
+            else:
+                info = await self._api.start_session(
+                    self._avatar_id, self._external_audio_config, renderer_profile=self._renderer_profile
+                )
         except BaseException:
             await self._try_cleanup(self._close_api, "HTTP client close")
             raise
