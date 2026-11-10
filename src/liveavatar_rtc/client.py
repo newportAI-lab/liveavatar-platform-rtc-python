@@ -23,7 +23,6 @@ class PlatformRTCClient:
 
     renderer_profile is an optional string: normal forces ordinary human,
     pet selects animal, 4k selects 4K. None follows the existing platform rules.
-    Requires a dispatcher supporting rendererProfile; cannot change a live session.
     """
 
     def __init__(
