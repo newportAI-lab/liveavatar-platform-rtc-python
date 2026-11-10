@@ -1,14 +1,14 @@
 # Changelog
 
+**English** | [中文](./CHANGELOG.zh-CN.md)
+
+Notable changes to this SDK are documented here. The date is the release day.
+
 ## [1.1.1] - 2026-11-10
 
 ### Added
 
 - `PlatformRTCClient` and `ApiClient.start_session` add optional string `renderer_profile`: `normal` forces ordinary human without automatic 4K selection, `pet` selects animal, `4k` selects 4K, and None preserves existing selection. The value is sent as `rendererProfile` in `/v1/session/start`.
-
-**English** | [中文](./CHANGELOG.zh-CN.md)
-
-Notable changes to this SDK are documented here. The date is the release day.
 
 ## [1.0.3] - 2026-10-22
 
