@@ -4,6 +4,12 @@
 
 本文件记录本 SDK 的主要变化。日期为发布日期。
 
+## [1.1.2] - 2026-11-18
+
+### Added
+
+- 新增卡通渲染模型 `cartoon`。创建 `PlatformRTCClient` 时设置 `renderer_profile="cartoon"` 即可选择该模型。
+
 ## [1.1.1] - 2026-11-10
 
 ### Added

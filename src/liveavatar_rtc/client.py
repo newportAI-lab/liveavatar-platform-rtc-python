@@ -21,8 +21,9 @@ _DEFAULT_BASE_URL = "https://facemarket.ai/vih/dispatcher"
 class PlatformRTCClient:
     """Main entry point for Live Avatar Platform RTC agent sessions.
 
-    renderer_profile is an optional string: normal forces ordinary human,
-    pet selects animal, 4k selects 4K. None follows the existing platform rules.
+    renderer_profile is an optional model name string (e.g. normal, pet, 4k, cartoon).
+    Model availability is validated by the platform; new names need no SDK update.
+    None omits the field; the platform treats empty or whitespace-only strings as unspecified.
     """
 
     def __init__(
@@ -36,8 +37,8 @@ class PlatformRTCClient:
         external_audio_config: dict | None = None,
         renderer_profile: str | None = None,
     ) -> None:
-        if renderer_profile is not None and renderer_profile not in ("normal", "pet", "4k"):
-            raise ValueError("renderer_profile must be normal, pet, or 4k")
+        if renderer_profile is not None and not isinstance(renderer_profile, str):
+            raise ValueError("renderer_profile must be a string or None")
         if base_url is None:
             base_url = os.environ.get("LIVEAVATAR_BASE_URL", _DEFAULT_BASE_URL)
         self._api_key = api_key

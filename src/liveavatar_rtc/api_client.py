@@ -36,9 +36,9 @@ class ApiClient:
         external_audio_config: dict | None = None,
         renderer_profile: str | None = None,
     ) -> SessionInfo:
-        """Start with optional normal/pet/4k model; None follows existing platform rules."""
-        if renderer_profile is not None and renderer_profile not in ("normal", "pet", "4k"):
-            raise ValueError("renderer_profile must be normal, pet, or 4k")
+        """Send the optional model name unchanged; None omits it and the platform treats blank strings as unspecified."""
+        if renderer_profile is not None and not isinstance(renderer_profile, str):
+            raise ValueError("renderer_profile must be a string or None")
         body: dict = {"avatarId": avatar_id, "mode": "rtcAgent"}
         if renderer_profile is not None:
             body["rendererProfile"] = renderer_profile

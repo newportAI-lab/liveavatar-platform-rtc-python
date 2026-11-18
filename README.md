@@ -62,10 +62,19 @@ Switch video during a session: [Switch video](#switch-video).
 
 ## Session lip-sync model
 
-`PlatformRTCClient` adds optional string `renderer_profile`: `"normal"` forces ordinary human without automatic 4K selection, `"pet"` selects animal, and `"4k"` selects 4K. `None` omits the field and preserves existing platform rules. It is sent as `rendererProfile` in `/v1/session/start`. The low-level `ApiClient.start_session` accepts the same optional parameter.
+To select a rendering model for the session, set the optional `renderer_profile` string when creating a `PlatformRTCClient`.
+
+| Value | Rendering model |
+| --- | --- |
+| `normal` | Standard human model; disables automatic 4K selection. |
+| `pet` | Animal model. |
+| `4k` | 4K model. |
+| `cartoon` | Cartoon model. |
+
+If `renderer_profile` is omitted or set to `None`, the platform follows the avatar's default model selection rules.
 
 ```python
-client = PlatformRTCClient(api_key=api_key, avatar_id=avatar_id, renderer_profile="pet")
+client = PlatformRTCClient(api_key=api_key, avatar_id=avatar_id, renderer_profile="cartoon")
 ```
 
 The selected model applies to this session.
