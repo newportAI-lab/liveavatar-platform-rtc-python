@@ -61,10 +61,19 @@ LLM 和 TTS 前会刻意不生成数字人语音；程序启动时也会打印�
 
 ## 开播嘴唇驱动模型
 
-`PlatformRTCClient` 新增可选字符串 `renderer_profile`：`"normal"` 强制普通人物模型，不按分辨率自动选择 4K；`"pet"` 使用动物模型；`"4k"` 使用 4K 模型。`None` 时省略字段并保留原规则。通过 `/v1/session/start` 的 JSON 字段 `rendererProfile` 发送。底层 `ApiClient.start_session` 支持同名可选参数。
+创建 `PlatformRTCClient` 时，设置可选字符串参数 `renderer_profile`，为本次会话指定渲染模型。
+
+| 参数值 | 渲染模型 |
+| --- | --- |
+| `normal` | 普通人物模型，不会自动选择 4K。 |
+| `pet` | 动物模型。 |
+| `4k` | 4K 模型。 |
+| `cartoon` | 卡通模型。 |
+
+省略 `renderer_profile` 或将其设为 `None` 时，平台按 Avatar 的默认规则选模。
 
 ```python
-client = PlatformRTCClient(api_key=api_key, avatar_id=avatar_id, renderer_profile="pet")
+client = PlatformRTCClient(api_key=api_key, avatar_id=avatar_id, renderer_profile="cartoon")
 ```
 
 所选模型用于本次会话。

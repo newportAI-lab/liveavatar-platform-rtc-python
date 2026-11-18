@@ -4,6 +4,12 @@
 
 Notable changes to this SDK are documented here. The date is the release day.
 
+## [1.1.2] - 2026-11-18
+
+### Added
+
+- Added the `cartoon` rendering model. To select it, set `renderer_profile="cartoon"` when creating a `PlatformRTCClient`.
+
 ## [1.1.1] - 2026-11-10
 
 ### Added

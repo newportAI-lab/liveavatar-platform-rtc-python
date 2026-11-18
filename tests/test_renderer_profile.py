@@ -7,7 +7,7 @@ from liveavatar_rtc.api_client import ApiClient
 from liveavatar_rtc.client import PlatformRTCClient
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("profile", [None, "normal", "pet", "4k"])
+@pytest.mark.parametrize("profile", [None, "normal", "pet", "4k", "cartoon", "future-model", "", " \t\n", "PET", "pet ", "baby"])
 async def test_model_body(profile):
     captured = []
     def handle(request):
@@ -24,14 +24,15 @@ async def test_model_body(profile):
         assert captured[0]["rendererProfile"] == profile
 
 @pytest.mark.asyncio
-async def test_client_forwards_model_before_connecting_rtc():
-    client = PlatformRTCClient("test", "avatar", renderer_profile="pet")
+@pytest.mark.parametrize("profile", ["cartoon", "future-model"])
+async def test_client_forwards_model_before_connecting_rtc(profile):
+    client = PlatformRTCClient("test", "avatar", renderer_profile=profile)
     client._api.start_session = AsyncMock(side_effect=RuntimeError("capture boundary"))
     with pytest.raises(RuntimeError, match="capture boundary"):
         await client.connect()
-    client._api.start_session.assert_awaited_once_with("avatar", None, renderer_profile="pet")
+    client._api.start_session.assert_awaited_once_with("avatar", None, renderer_profile=profile)
 
-@pytest.mark.parametrize("profile", ["", "PET", "pet ", "baby", 1, True, {}, []])
+@pytest.mark.parametrize("profile", [1, True, {}, []])
 def test_invalid_model_rejected_before_http_client_creation(profile):
     with pytest.raises(ValueError):
         PlatformRTCClient("test", "avatar", renderer_profile=profile)
